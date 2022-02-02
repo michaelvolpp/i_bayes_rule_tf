@@ -154,3 +154,4 @@ cython_debug/
 log/
 .DS_Store
 .vscode
+*.code-workspace
