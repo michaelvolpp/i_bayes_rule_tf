@@ -516,9 +516,5 @@ class TargetDistWrapper:
         return log_density, log_density_grad, log_density_hess
 
     @tf.function
-    def sample(self, n_samples: int):
-        return self.target_dist.sample(n_samples)
-
-    @tf.function
     def log_density(self, z: tf.Tensor):
         return self.target_dist.log_density(z)
