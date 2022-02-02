@@ -1,15 +1,12 @@
 import math
 
-import numpy as np
 import pytest
 import tensorflow as tf
 import tensorflow_probability as tfp
 from i_bayes_rule.util import (
-    GMM,
-    TargetDistWrapper,
     compute_S_bar,
     cov_to_scale_tril,
-    eval_grad_hess,
+    eval_fn_grad_hess,
     expectation_prod_neg,
     gmm_log_component_densities,
     gmm_log_density,
@@ -779,8 +776,8 @@ def test_eval_grad_hess():
 
     # check 1: no batch_dim
     z = tf.random.normal((n_samples, 2))
-    f_z, f_z_grad, f_z_hess = eval_grad_hess(
-        fun=fun, z=z, compute_grad=True, compute_hess=True
+    f_z, f_z_grad, f_z_hess = eval_fn_grad_hess(
+        fn=fun, z=z, compute_grad=True, compute_hess=True
     )
     true_f_z, true_f_z_grad, true_f_z_hess = fun_with_known_grad_hess(z)
     assert f_z.shape == (n_samples,)
@@ -793,8 +790,8 @@ def test_eval_grad_hess():
     # check 2: batch_dim
     batch_shape = (10, 2, 3, 4, 5, 6)
     z = tf.random.normal((n_samples,) + batch_shape + (2,))
-    f_z, f_z_grad, f_z_hess = eval_grad_hess(
-        fun=fun, z=z, compute_grad=True, compute_hess=True
+    f_z, f_z_grad, f_z_hess = eval_fn_grad_hess(
+        fn=fun, z=z, compute_grad=True, compute_hess=True
     )
     true_f_z, true_f_z_grad, true_f_z_hess = fun_with_known_grad_hess(z)
     assert f_z.shape == (n_samples,) + batch_shape
@@ -1155,78 +1152,3 @@ def test_log_omega_log_w_conversion():
 #     assert tf.experimental.numpy.allclose(gmm.scale_tril, scale_tril)
 #     assert tf.experimental.numpy.allclose(gmm.gmm.mixture_distribution.logits, log_w)
 #     assert tf.experimental.numpy.allclose(gmm.log_w, log_w)
-
-
-# def test_target_dist_wrapper():
-#     # generate GMM, which we will use as target dist
-#     w = np.array([0.1, 0.5, 0.4])
-#     mu = np.array(
-#         [
-#             [-1.0, -1.0],
-#             [-1.0, 1.0],
-#             [1.0, 0.0],
-#         ]
-#     )
-#     scale_tril = np.array(
-#         [
-#             [[0.1, 0.0], [0.0, 0.5]],
-#             [[2.0, 0.0], [-0.5, 3.0]],
-#             [[1.0, 0.0], [-4.0, 1.0]],
-#         ]
-#     )
-#     cov = np.matmul(scale_tril, tf.transpose(scale_tril, perm=(0, 2, 1)))
-#     K = w.shape[0]
-#     D = mu.shape[1]
-#     gmm = GMM_LNPDF(target_weights=w, target_means=mu, target_covars=cov)
-
-#     # generate samples
-#     S = 10
-#     z = gmm.sample(S)
-
-#     # generate target dist
-#     target_dist = TargetDistWrapper(target_dist=gmm)
-#     del gmm  # we only need target_dist from now on
-
-#     ## test computation log_marginal_z using a test function with known grad/hess
-#     log_density, log_density_grad, log_density_hess = target_dist.log_density_grad_hess(
-#         z=z,
-#         compute_grad=True,
-#         compute_hess=True,
-#         test_fun=lambda z: fun_with_known_grad_hess(z)[0],
-#     )
-#     assert log_density.shape == (S,)
-#     assert log_density_grad.shape == (S, D)
-#     assert log_density_hess.shape == (S, D, D)
-#     (
-#         true_log_density,
-#         true_log_density_grad,
-#         true_log_density_hess,
-#     ) = fun_with_known_grad_hess(z)
-#     # TODO:
-#     # the values should match exactly, but for some runs they do and for others there
-#     # are miniscule differences -> why?
-#     assert tf.experimental.numpy.allclose(log_density, true_log_density)
-#     assert tf.experimental.numpy.allclose(log_density_grad, true_log_density_grad)
-#     assert tf.experimental.numpy.allclose(log_density_hess, true_log_density_hess)
-
-#     ## test computation log_marginal_z using the GMM likelihood
-#     log_density, log_density_grad, log_density_hess = target_dist.log_density_grad_hess(
-#         z=z, compute_grad=True, compute_hess=True
-#     )
-#     assert log_density.shape == (S,)
-#     assert log_density_grad.shape == (S, D)
-#     assert log_density_hess.shape == (S, D, D)
-
-#     log_density, log_density_grad, log_density_hess = target_dist.log_density_grad_hess(
-#         z=z, compute_grad=True, compute_hess=False
-#     )
-#     assert log_density.shape == (S,)
-#     assert log_density_grad.shape == (S, D)
-#     assert log_density_hess is None
-
-#     log_density, log_density_grad, log_density_hess = target_dist.log_density_grad_hess(
-#         z=z, compute_grad=False, compute_hess=False
-#     )
-#     assert log_density.shape == (S,)
-#     assert log_density_grad is None
-#     assert log_density_hess is None

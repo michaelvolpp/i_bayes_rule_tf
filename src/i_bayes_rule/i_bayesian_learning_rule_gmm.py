@@ -3,14 +3,14 @@ import time
 
 import numpy as np
 import tensorflow as tf
-import tensorflow_probability as tfp
+from tqdm import tqdm
 
+from i_bayes_rule.lnpdf import LNPDF
 from i_bayes_rule.util import (
     GMM,
-    TargetDistWrapper,
-    eval_grad_hess,
-    expectation_prod_neg,
     compute_S_bar,
+    eval_fn_grad_hess,
+    expectation_prod_neg,
     log_omega_to_log_w,
     log_w_to_log_omega,
     scale_tril_to_cov,
@@ -27,18 +27,17 @@ def i_bayesian_learning_rule_gmm(
 ):
     ## check inputs
     # mixture weights
-    assert tf.rank(w_init) == 1  # vector of scalar mixture weights
-    K = w_init.shape[0]  # number of components
-    # means
-    assert tf.rank(mu_init) == 2
-    assert mu_init.shape[0] == K
-    D = mu_init.shape[1]
-    # covariances
-    assert cov_init.shape == (K, D, D)
+    batch_shape = w_init.shape[:-1]
+    n_components = w_init.shape[-1]
+    d_z = mu_init.shape[-1]
+    assert w_init.shape == batch_shape + (n_components,)
+    assert mu_init.shape == batch_shape + (n_components, d_z)
+    assert cov_init.shape == batch_shape + (n_components, d_z, d_z)
+
     # savepath
     os.makedirs(config["savepath"], exist_ok=True)
     # check compatibility of model and target dist
-    assert target_dist.get_num_dimensions() == D
+    assert target_dist.get_num_dimensions() == d_z
 
     ## instantiate model and target distribution
     model = GMM(
@@ -46,29 +45,20 @@ def i_bayesian_learning_rule_gmm(
         loc=mu_init,
         prec=tf.linalg.inv(cov_init),  # TODO: do we get around this?
     )
-    tgt_dist_wrap = TargetDistWrapper(target_dist=target_dist)
 
     ## training loop
     n_fevals_total = 0
-    total_wall_time = 0
     with tqdm(total=config["n_iter"]) as pbar:
         for i in range(config["n_iter"]):
             # update parameters
-            t1 = time.time()
             model, n_fevals = step(
-                tgt_dist_wrap=tgt_dist_wrap,
+                target_density_fn=target_dist.log_density,
                 model=model,
                 n_samples=config["n_samples_per_iter"],
                 lr_w=config["lr_w"],
                 lr_mu_prec=config["lr_mu_prec"],
                 prec_method=config["prec_update_method"],
-                lr_mu_prec_gamma=config["lr_mu_prec_gamma"],
-                lr_w_gamma=config["lr_w_gamma"],
             )
-            t2 = time.time()
-            # save wall time every step
-            wall_time = t2 - t1
-            total_wall_time += wall_time
             # update n_fevals_total
             # TODO: what does n_fevals actually count
             n_fevals_total += n_fevals
@@ -80,46 +70,32 @@ def i_bayesian_learning_rule_gmm(
             ):
                 callback(model=model)
             if i % config["log_interval"] == 0 or i == config["n_iter"] - 1:
-                tgt_ll, elbo = log_results(
-                    savepath=config["savepath"],
+                log_results(
                     model=model,
-                    tgt_dist_wrap=tgt_dist_wrap,
+                    target_dist=target_dist,
+                    savepath=config["savepath"],
                     n_fevals_total=n_fevals_total,
                     iteration=i,
                     pbar=pbar,
-                    total_wall_time=total_wall_time,
                 )
-                if wandb_logger is not None:
-                    wandb_logger.process(
-                        {
-                            "iter": i,
-                            "n_fevals_total": n_fevals_total,
-                            "target_ll": tgt_ll,
-                            "-elbo": -elbo,
-                        }
-                    )
 
     return model
 
 
 def log_results(
-    savepath,
-    model,
-    tgt_dist_wrap,
-    n_fevals_total,
-    iteration,
+    model: GMM,
+    target_dist: LNPDF,
+    savepath: str,
+    n_fevals_total: int,
+    iteration: int,
     pbar,
-    total_wall_time=None,
+    save_to_file=False,
 ):
     # draw test samples and compute target log likelihood
     z = model.sample(2000)
-    model_ll, _, _ = model.log_density_grad_hess(
-        z=z, compute_grad=False, compute_hess=False
-    )
+    model_ll = model.log_density(z=z)
     model_ll = tf.reduce_mean(model_ll)
-    tgt_ll, _, _ = tgt_dist_wrap.log_density_grad_hess(
-        z=z, compute_grad=False, compute_hess=False
-    )
+    tgt_ll = target_dist.log_density(x=z)
     tgt_ll = tf.reduce_mean(tgt_ll)
     elbo = tgt_ll - model_ll
 
@@ -131,33 +107,29 @@ def log_results(
     tgt_ll = tgt_ll.numpy()
     elbo = elbo.numpy()
 
+    # update pbar
     pbar.set_postfix(
         {"n_evals": n_fevals_total, "avg. sample logpdf": tgt_ll, "ELBO": elbo}
     )
 
     # save GMM parameters to file
-    os.makedirs(os.path.join(savepath, "gmm_dump"), exist_ok=True)
-    np.savez(
-        file=os.path.join(savepath, "gmm_dump", f"gmm_dump_{iteration:01d}.npz"),
-        weights=w,
-        means=mu,
-        covs=cov,
-        timestamps=time.time(),
-        fevals=n_fevals_total,
-    )
-    if total_wall_time is not None:
-        wall_time_path = os.path.join(savepath, "wall_time_dump")
-        os.makedirs(wall_time_path, exist_ok=True)
-        np.save(
-            os.path.join(wall_time_path, f"total_wall_time_dump_{iteration:01d}.npy"),
-            total_wall_time,
+    if save_to_file:
+        os.makedirs(os.path.join(savepath, "gmm_dump"), exist_ok=True)
+        np.savez(
+            file=os.path.join(savepath, "gmm_dump", f"gmm_dump_{iteration:01d}.npz"),
+            weights=w,
+            means=mu,
+            covs=cov,
+            timestamps=time.time(),
+            fevals=n_fevals_total,
         )
+
     return tgt_ll, elbo
 
 
 def step(
     model,
-    target_dist,
+    target_density_fn,
     n_samples,
     lr_w,
     lr_mu_prec,
@@ -166,7 +138,7 @@ def step(
     # check input
     n_components = model.log_w.shape[-1]
     d_z = model.loc.shape[-1]
-    batch_shape = model.loc.shape[:-1]
+    batch_shape = model.loc.shape[:-2]
 
     ## sample z from GMM model
     z = model.sample(n_samples=n_samples)
@@ -179,8 +151,8 @@ def step(
         log_tgt_density,
         log_tgt_density_grad,
         log_tgt_density_hess,  # we only require this for the hessian method
-    ) = eval_grad_hess(
-        fun=target_dist, z=z, compute_grad=True, compute_hess=compute_hess
+    ) = eval_fn_grad_hess(
+        fn=target_density_fn, z=z, compute_grad=True, compute_hess=compute_hess
     )
     assert log_tgt_density.shape == (n_samples,) + batch_shape
     assert log_tgt_density_grad.shape == (n_samples,) + batch_shape + (d_z,)
@@ -193,7 +165,7 @@ def step(
         log_model_density,
         log_model_density_grad,
         log_model_density_hess,
-    ) = eval_grad_hess(fun=model.log_density, z=z, compute_grad=True, compute_hess=True)
+    ) = eval_fn_grad_hess(fn=model.log_density, z=z, compute_grad=True, compute_hess=True)
     assert log_model_density.shape == (n_samples,) + batch_shape
     assert log_model_density_grad.shape == (n_samples,) + batch_shape + (d_z,)
     assert log_model_density_hess.shape == (n_samples,) + batch_shape + (d_z, d_z)
@@ -209,7 +181,7 @@ def step(
     new_log_w = update_log_w(
         log_w=model.log_w,
         log_delta_z=log_delta_z,
-        log_tgt_density=log_tgt_density,
+        log_target_density=log_tgt_density,
         log_model_density=log_model_density,
         lr=lr_w,
     )
@@ -217,15 +189,15 @@ def step(
         mu=model.loc,
         prec_tril=model.prec_tril,
         log_delta_z=log_delta_z,
-        log_tgt_density_grad=log_tgt_density_grad,
+        log_target_density_grad=log_tgt_density_grad,
         log_model_density_grad=log_model_density_grad,
         lr=lr_mu_prec,
     )
     if prec_method == "hessian":
         g = compute_g_hessian(
             log_delta_z=log_delta_z,
-            log_tgt_post_hess=log_tgt_density_hess,
-            log_model_marg_z_hess=log_model_density_hess,
+            log_target_density_hess=log_tgt_density_hess,
+            log_model_density_hess=log_model_density_hess,
         )
     else:
         assert prec_method == "reparam"
@@ -234,8 +206,8 @@ def step(
             mu=model.loc,
             prec=model.prec,
             log_delta_z=log_delta_z,
-            log_tgt_post_grad=log_tgt_density_grad,
-            log_model_marg_z_hess=log_model_density_hess,
+            log_target_density_grad=log_tgt_density_grad,
+            log_model_density_hess=log_model_density_hess,
         )
     assert g.shape == batch_shape + (n_components, d_z, d_z)
     new_prec = update_prec(
@@ -258,17 +230,17 @@ def step(
 def update_log_w(
     log_w: tf.Tensor,
     log_delta_z: tf.Tensor,
-    log_tgt_density: tf.Tensor,
+    log_target_density: tf.Tensor,
     log_model_density: tf.Tensor,
     lr: float,
 ):
     # check inputs
     batch_shape = log_w.shape[:-1]
     n_components = log_w.shape[-1]
-    n_samples = log_tgt_density.shape[0]
+    n_samples = log_target_density.shape[0]
     assert log_w.shape == batch_shape + (n_components,)
     assert log_delta_z.shape == (n_samples,) + batch_shape + (n_components,)
-    assert log_tgt_density.shape == (n_samples,) + batch_shape
+    assert log_target_density.shape == (n_samples,) + batch_shape
     assert log_model_density.shape == (n_samples,) + batch_shape
 
     # computations are performed in log_omega space
@@ -276,7 +248,7 @@ def update_log_w(
     log_omega = log_w_to_log_omega(log_w)
 
     ## update log_omega
-    b_z = -log_tgt_density + log_model_density
+    b_z = -log_target_density + log_model_density
     assert b_z.shape == (n_samples,) + batch_shape
     # compute E_q[delta(z) * b(z)]
     expectation = expectation_prod_neg(log_a_z=log_delta_z, b_z=b_z[..., None])
@@ -299,7 +271,7 @@ def update_mu(
     mu: tf.Tensor,
     prec_tril: tf.Tensor,
     log_delta_z: tf.Tensor,
-    log_tgt_density_grad: tf.Tensor,
+    log_target_density_grad: tf.Tensor,
     log_model_density_grad: tf.Tensor,
     lr: float,
 ):
@@ -307,15 +279,15 @@ def update_mu(
     batch_shape = mu.shape[:-2]
     n_components = mu.shape[-2]
     d_z = mu.shape[-1]
-    n_samples = log_tgt_density_grad.shape[0]
+    n_samples = log_target_density_grad.shape[0]
     assert mu.shape == batch_shape + (n_components, d_z)
     assert prec_tril.shape == batch_shape + (n_components, d_z, d_z)
     assert log_delta_z.shape == (n_samples,) + batch_shape + (n_components,)
-    assert log_tgt_density_grad.shape == (n_samples,) + batch_shape + (d_z,)
+    assert log_target_density_grad.shape == (n_samples,) + batch_shape + (d_z,)
     assert log_model_density_grad.shape == (n_samples,) + batch_shape + (d_z,)
 
     ## update mu
-    b_z_grad = -log_tgt_density_grad + log_model_density_grad
+    b_z_grad = -log_target_density_grad + log_model_density_grad
     assert b_z_grad.shape == (n_samples,) + batch_shape + (d_z,)
     # compute E_q[delta(z) * d/dz(b(z))]
     expectation = expectation_prod_neg(
@@ -340,20 +312,20 @@ def update_mu(
 @tf.function
 def compute_g_hessian(
     log_delta_z: tf.Tensor,
-    log_tgt_density_hess: tf.Tensor,
+    log_target_density_hess: tf.Tensor,
     log_model_density_hess: tf.Tensor,
 ):
     # check inputs
     n_samples = log_delta_z.shape[0]
     n_components = log_delta_z.shape[-1]
     batch_shape = log_delta_z.shape[1:-1]
-    d_z = log_tgt_density_hess.shape[-1]
+    d_z = log_target_density_hess.shape[-1]
     assert log_delta_z.shape == (n_samples,) + batch_shape + (n_components,)
-    assert log_tgt_density_hess.shape == (n_samples,) + batch_shape + (d_z, d_z)
+    assert log_target_density_hess.shape == (n_samples,) + batch_shape + (d_z, d_z)
     assert log_model_density_hess.shape == (n_samples,) + batch_shape + (d_z, d_z)
 
     # compute g = -E_q[delta(z) * d^2/dz^2 b(z)]
-    b_z_hess = -log_tgt_density_hess + log_model_density_hess
+    b_z_hess = -log_target_density_hess + log_model_density_hess
     assert b_z_hess.shape == (n_samples,) + batch_shape + (d_z, d_z)
     g = -expectation_prod_neg(
         log_a_z=log_delta_z[..., None, None], b_z=b_z_hess[..., None, :, :]
@@ -370,23 +342,25 @@ def compute_g_reparam(
     mu: tf.Tensor,
     prec: tf.Tensor,
     log_delta_z: tf.Tensor,
-    log_tgt_density_grad: tf.Tensor,
+    log_target_density_grad: tf.Tensor,
     log_model_density_hess: tf.Tensor,
 ):
     # check inputs
     n_samples = log_delta_z.shape[0]
     n_components = log_delta_z.shape[-1]
     batch_shape = log_delta_z.shape[1:-1]
-    d_z = log_tgt_density_grad.shape[-1]
+    d_z = log_target_density_grad.shape[-1]
     assert z.shape == n_samples + batch_shape + (d_z,)
     assert mu.shape == batch_shape + (n_components, d_z)
     assert prec.shape == batch_shape + (n_components, d_z, d_z)
     assert log_delta_z.shape == (n_samples,) + batch_shape + (n_components,)
-    assert log_tgt_density_grad.shape == (n_samples,) + batch_shape + (d_z, d_z)
+    assert log_target_density_grad.shape == (n_samples,) + batch_shape + (d_z, d_z)
     assert log_model_density_hess.shape == (n_samples,) + batch_shape + (d_z, d_z)
 
     ## compute g = -E_q[delta(z) * ((S_bar + S_bar^T)/2 + d^2/dz^2 log(q(z))]
-    S_bar = compute_S_bar(prec=prec, z=z, mu=mu, log_tgt_post_grad=log_tgt_density_grad)
+    S_bar = compute_S_bar(
+        prec=prec, z=z, mu=mu, log_tgt_post_grad=log_target_density_grad
+    )
     # symmetrize
     S_bar_sym = 0.5 * (S_bar + tf.linalg.matrix_transpose(S_bar))
     assert S_bar_sym.shape == (n_samples,) + batch_shape + (n_components, d_z, d_z)
@@ -401,7 +375,12 @@ def compute_g_reparam(
 
 
 @tf.function
-def update_prec(prec: tf.Tensor, prec_tril: tf.Tensor, g: tf.Tensor, lr: float):
+def update_prec(
+    prec: tf.Tensor,
+    prec_tril: tf.Tensor,
+    g: tf.Tensor,
+    lr: float,
+):
     # check input
     batch_shape = prec.shape[:-3]
     n_components = prec.shape[-3]

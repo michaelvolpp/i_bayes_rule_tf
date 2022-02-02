@@ -3,6 +3,7 @@ from tensorflow import keras
 import tensorflow_probability as tfp
 
 from i_bayes_rule.util import GMM
+from i_bayes_rule.util import step as gmm_learner_step
 
 
 class NP:
@@ -151,7 +152,7 @@ class ConditionalPriorLearner:
         assert y_c.shape == (self.model.n_tasks, n_points_ctx, self.model.d_y)
 
         ## step
-        gmm_learner_step(
+        model, _ = gmm_learner_step(
             model=self.model.gmm,
             target_dist=self.model.log_density,
             n_samples=self.n_samples,

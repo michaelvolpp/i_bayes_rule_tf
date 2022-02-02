@@ -226,7 +226,7 @@ def gmm_log_density(
     return log_density
 
 
-def eval_grad_hess(fun, z: tf.Tensor, compute_grad: bool, compute_hess: bool):
+def eval_fn_grad_hess(fn, z: tf.Tensor, compute_grad: bool, compute_hess: bool):
     # check input
     assert not (compute_grad == False and compute_hess == True)
     n_samples = z.shape[0]
@@ -235,11 +235,11 @@ def eval_grad_hess(fun, z: tf.Tensor, compute_grad: bool, compute_hess: bool):
     assert z.shape == (n_samples,) + batch_shape + (d_z,)
 
     if not compute_grad:
-        f_z, f_z_grad, f_z_hess = _eval_fun(fun=fun, z=z), None, None
+        f_z, f_z_grad, f_z_hess = _eval_fn(fn=fn, z=z), None, None
     elif compute_grad and not compute_hess:
-        (f_z, f_z_grad), f_z_hess = _eval_fun_grad(fun=fun, z=z), None
+        (f_z, f_z_grad), f_z_hess = _eval_fn_grad(fn=fn, z=z), None
     else:
-        f_z, f_z_grad, f_z_hess = _eval_fun_grad_hess(fun=fun, z=z)
+        f_z, f_z_grad, f_z_hess = _eval_fn_grad_hess(fn=fn, z=z)
 
     # check output
     assert f_z.shape == (n_samples,) + batch_shape
@@ -252,26 +252,26 @@ def eval_grad_hess(fun, z: tf.Tensor, compute_grad: bool, compute_hess: bool):
 
 
 @tf.function
-def _eval_fun(fun, z: tf.Tensor):
-    # compute fun(z)
-    f_z = fun(z)
+def _eval_fn(fn, z: tf.Tensor):
+    # compute fn(z)
+    f_z = fn(z)
     return f_z
 
 
 @tf.function
-def _eval_fun_grad(fun, z: tf.Tensor):
-    # compute fun(z), and its gradient
+def _eval_fn_grad(fn, z: tf.Tensor):
+    # compute fn(z), and its gradient
     with tf.GradientTape(watch_accessed_variables=False) as g2:
         g2.watch(z)
-        f_z = fun(z)
+        f_z = fn(z)
     f_z_grad = g2.gradient(f_z, z)
 
     return f_z, f_z_grad
 
 
 @tf.function
-def _eval_fun_grad_hess(fun, z: tf.Tensor):
-    # compute fun(z), and its gradient and hessian
+def _eval_fn_grad_hess(fn, z: tf.Tensor):
+    # compute fn(z), and its gradient and hessian
 
     # flatten batch dimensions
     batch_shape = z.shape[:-1]
@@ -282,7 +282,7 @@ def _eval_fun_grad_hess(fun, z: tf.Tensor):
         g1.watch(z)
         with tf.GradientTape(watch_accessed_variables=False) as g2:
             g2.watch(z)
-            f_z = fun(z)
+            f_z = fn(z)
         f_z_grad = g2.gradient(f_z, z)
     f_z_hess = g1.batch_jacobian(f_z_grad, z)
 
@@ -427,7 +427,7 @@ class GMM:
     @property
     def cov(self):
         return self._cov
-    
+
     # TODO: check consistency of shapes
     @loc.setter
     def loc(self, value):
@@ -471,50 +471,8 @@ class GMM:
             z=z, log_w=self.log_w, loc=self.loc, scale_tril=self.scale_tril
         )
 
-    def log_density_grad_hess(
-        self, z: tf.Tensor, compute_grad: bool, compute_hess: bool
-    ):
-        """
-        Compute the log density, (i.e. q(z)), and its gradient and hessian.
-        """
-        log_density, log_density_grad, log_density_hess = eval_grad_hess(
-            fun=self.log_density,
-            z=z,
-            compute_grad=compute_grad,
-            compute_hess=compute_hess,
-        )
-        return log_density, log_density_grad, log_density_hess
-
     @tf.function
     def log_component_densities(self, z: tf.Tensor):
         return gmm_log_component_densities(
             z=z, loc=self.loc, scale_tril=self.scale_tril
         )
-
-
-class TargetDistWrapper:
-    def __init__(
-        self,
-        # target_dist: LNPDF,
-        target_dist,
-    ):
-        self.target_dist = target_dist
-
-    def log_density_grad_hess(
-        self, z: tf.Tensor, compute_grad: bool, compute_hess: bool
-    ):
-        """
-        Compute the unnormalized log posterior density, (i.e. likelihood x prior),
-        and its gradient and hessian.
-        """
-        log_density, log_density_grad, log_density_hess = eval_grad_hess(
-            fun=self.log_density,
-            z=z,
-            compute_grad=compute_grad,
-            compute_hess=compute_hess,
-        )
-        return log_density, log_density_grad, log_density_hess
-
-    @tf.function
-    def log_density(self, z: tf.Tensor):
-        return self.target_dist.log_density(z)
