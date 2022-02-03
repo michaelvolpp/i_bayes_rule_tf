@@ -4,6 +4,8 @@ import numpy as np
 import tensorflow as tf
 import tensorflow_probability as tfp
 
+from i_bayes_rule.util import sample_gmm, gmm_log_density, cov_to_scale_tril
+
 # Source: Oleg
 
 
@@ -25,34 +27,39 @@ class LNPDF:
 
 
 class GMM_LNPDF(LNPDF):
-    def __init__(self, target_weights, target_means, target_covars):
-        self.target_weights = target_weights
-        self.target_means = target_means
-        self.target_covars = target_covars
-        self.target_means = target_means.astype(np.float32)
-        self.target_covars = target_covars.astype(np.float32)
-        self.gmm = tfp.distributions.MixtureSameFamily(
-            mixture_distribution=tfp.distributions.Categorical(
-                logits=np.log(target_weights).astype(np.float32)
-            ),
-            components_distribution=tfp.distributions.MultivariateNormalTriL(
-                loc=target_means.astype(np.float32),
-                scale_tril=np.linalg.cholesky(target_covars).astype(np.float32),
-            ),
-        )
-
-    def log_density(self, x):
-        x = tf.cast(x, dtype=tf.float32)
-        return self.gmm.log_prob(x)
+    def __init__(
+        self,
+        target_weights: np.ndarray,
+        target_means: np.ndarray,
+        target_covars: np.ndarray,
+    ):
+        self.log_w = tf.math.log(tf.constant(target_weights.astype(np.float32)))
+        self.mu = tf.constant(target_means.astype(np.float32))
+        self.cov = tf.constant(target_covars.astype(np.float32))
 
     def get_num_dimensions(self):
-        return len(self.target_means[0])
+        return self.mu.shape[-1]
 
     def can_sample(self):
         return True
 
+    @tf.function
     def sample(self, n):
-        return self.gmm.sample(n)
+        return sample_gmm(
+            n_samples=n,
+            log_w=self.log_w,
+            loc=self.mu,
+            scale_tril=cov_to_scale_tril(self.cov),
+        )
+
+    @tf.function
+    def log_density(self, x):
+        return gmm_log_density(
+            z=x,
+            log_w=self.log_w,
+            loc=self.mu,
+            scale_tril=cov_to_scale_tril(self.cov),
+        )
 
 
 def make_target(num_dimensions):
@@ -79,7 +86,7 @@ def U(theta):
     )
 
 
-def make_simple_target():
+def make_simple_target(n_tasks):
     pi = math.pi
 
     # weights
@@ -102,6 +109,11 @@ def make_simple_target():
     cov3 = np.array([[1.0, 0.0], [0.0, 2.0]])
     cov3 = U(pi / 2) @ cov3 @ np.transpose(U(pi / 2))
     cov_true = np.stack([cov1, cov2, cov3], axis=0)
+
+    # stack the parameters n_tasks times
+    w_true = np.stack([w_true] * n_tasks, axis=0)
+    mu_true = np.stack([mu_true] * n_tasks, axis=0)
+    cov_true = np.stack([cov_true] * n_tasks, axis=0)
 
     # generate target dist
     target_dist = GMM_LNPDF(

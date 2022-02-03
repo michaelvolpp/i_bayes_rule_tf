@@ -165,7 +165,9 @@ def step(
         log_model_density,
         log_model_density_grad,
         log_model_density_hess,
-    ) = eval_fn_grad_hess(fn=model.log_density, z=z, compute_grad=True, compute_hess=True)
+    ) = eval_fn_grad_hess(
+        fn=model.log_density, z=z, compute_grad=True, compute_hess=True
+    )
     assert log_model_density.shape == (n_samples,) + batch_shape
     assert log_model_density_grad.shape == (n_samples,) + batch_shape + (d_z,)
     assert log_model_density_hess.shape == (n_samples,) + batch_shape + (d_z, d_z)
@@ -227,6 +229,7 @@ def step(
     return model, n_feval
 
 
+@tf.function
 def update_log_w(
     log_w: tf.Tensor,
     log_delta_z: tf.Tensor,
@@ -254,7 +257,7 @@ def update_log_w(
     expectation = expectation_prod_neg(log_a_z=log_delta_z, b_z=b_z[..., None])
     assert expectation.shape == batch_shape + (n_components,)
     # compute E_q[(delta(z)[:-1] - delta(z)[-1])*b(z)]
-    d_log_omega = expectation[..., :-1] - expectation[..., -1]
+    d_log_omega = expectation[..., :-1] - expectation[..., -1:]
     # update log_omega
     d_log_omega = -lr * d_log_omega
     log_omega = log_omega + d_log_omega
@@ -267,6 +270,7 @@ def update_log_w(
     return log_w
 
 
+@tf.function
 def update_mu(
     mu: tf.Tensor,
     prec_tril: tf.Tensor,

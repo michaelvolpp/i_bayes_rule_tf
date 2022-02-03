@@ -718,6 +718,7 @@ def test_gmm_log_density():
 
 
 def fun_with_known_grad_hess(z: tf.Tensor):
+    # TODO: this function should return a different result for each dim in batch_shape
     # Implement f: R^2 -> R, f(z) = z_0**2 + 2*z_1**3 + 3*z_0*z_1 + 5
     n_samples = z.shape[0]
     batch_shape = z.shape[1:-1]
@@ -768,7 +769,6 @@ def fun_with_known_grad_hess(z: tf.Tensor):
 
 def test_eval_grad_hess():
     # use this only for debugging
-    # TODO: setting this to false might make test fail for large no. of batch_dims
     tf.config.run_functions_eagerly(True)
 
     n_samples = 10
@@ -788,7 +788,9 @@ def test_eval_grad_hess():
     assert tf.experimental.numpy.allclose(f_z_hess, true_f_z_hess)
 
     # check 2: batch_dim
-    batch_shape = (10, 2, 3, 4, 5, 6)
+    # TODO: setting this to false might make test fail for large no. of batch_dims
+    tf.config.run_functions_eagerly(True)
+    batch_shape = (9,)
     z = tf.random.normal((n_samples,) + batch_shape + (2,))
     f_z, f_z_grad, f_z_hess = eval_fn_grad_hess(
         fn=fun, z=z, compute_grad=True, compute_hess=True

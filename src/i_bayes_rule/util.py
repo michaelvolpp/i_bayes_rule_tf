@@ -2,8 +2,10 @@ import math
 
 import tensorflow as tf
 import tensorflow_probability as tfp
+import itertools
 
 
+@tf.function
 def prec_to_prec_tril(prec: tf.Tensor):
     # Compute lower cholesky factors of precision matrices
 
@@ -19,6 +21,7 @@ def prec_to_prec_tril(prec: tf.Tensor):
     return prec_tril
 
 
+@tf.function
 def prec_to_scale_tril(prec: tf.Tensor):
     # Compute lower cholesky factors of covariance matrices from precision matrices
 
@@ -38,6 +41,7 @@ def prec_to_scale_tril(prec: tf.Tensor):
     return scale_tril
 
 
+@tf.function
 def scale_tril_to_cov(scale_tril: tf.Tensor):
     # check input
     d_z = scale_tril.shape[-1]
@@ -51,6 +55,7 @@ def scale_tril_to_cov(scale_tril: tf.Tensor):
     return cov
 
 
+@tf.function
 def cov_to_scale_tril(cov: tf.Tensor):
     # check input
     d_z = cov.shape[-1]
@@ -96,6 +101,7 @@ def cov_to_scale_tril(cov: tf.Tensor):
 #     return prec
 
 
+@tf.function
 def sample_categorical(n_samples: int, log_w: tf.Tensor):
     # check input
     batch_shape = log_w.shape[:-1]
@@ -114,6 +120,7 @@ def sample_categorical(n_samples: int, log_w: tf.Tensor):
     return samples
 
 
+@tf.function
 def sample_gaussian(n_samples: int, loc: tf.Tensor, scale_tril: tf.Tensor):
     # check input
     batch_shape = loc.shape[:-1]
@@ -134,6 +141,7 @@ def sample_gaussian(n_samples: int, loc: tf.Tensor, scale_tril: tf.Tensor):
     return samples
 
 
+@tf.function
 def sample_gmm(n_samples: int, log_w: tf.Tensor, loc: tf.Tensor, scale_tril: tf.Tensor):
     # check input
     d_z = loc.shape[-1]
@@ -169,6 +177,7 @@ def sample_gmm(n_samples: int, log_w: tf.Tensor, loc: tf.Tensor, scale_tril: tf.
     return samples
 
 
+@tf.function
 def gmm_log_component_densities(z: tf.Tensor, loc: tf.Tensor, scale_tril: tf.Tensor):
     # check input
     n_samples = z.shape[0]
@@ -201,6 +210,7 @@ def gmm_log_component_densities(z: tf.Tensor, loc: tf.Tensor, scale_tril: tf.Ten
     return log_component_densities
 
 
+@tf.function
 def gmm_log_density(
     z: tf.Tensor, log_w: tf.Tensor, loc: tf.Tensor, scale_tril: tf.Tensor
 ):
@@ -271,25 +281,43 @@ def _eval_fn_grad(fn, z: tf.Tensor):
 
 @tf.function
 def _eval_fn_grad_hess(fn, z: tf.Tensor):
+    # TODO: fully batch the Hessian computation
+    #  The problem is that batch_jacobian allows only one batch dimension. If 
+    #  multiple batch dimensions (e.g., sample-dim and task-dim) are present, 
+    #  batch jacobian does unneccesary computations akin to the ones described
+    #  here: https://www.tensorflow.org/guide/advanced_autodiff#batch_jacobian
+    #  Flattening the batch-dims **after** gradient computation and before calling
+    #  batch jacobian is not an option as tf creates new variables for reshaped 
+    #  variables, losing track of gradients.
+    #  Flattening the batch-dims **before** all computations is not an option
+    #  because fn(z) has to be called with correct batch dims, as in general
+    #  it performs different computations for each batch dim.
+
     # compute fn(z), and its gradient and hessian
 
-    # flatten batch dimensions
-    batch_shape = z.shape[:-1]
+    # check input
+    n_samples = z.shape[0]
+    batch_shape = z.shape[1:-1]
     d_z = z.shape[-1]
-    z = tf.reshape(z, (-1, d_z))
+    assert not len(batch_shape) > 1  # not implemented yet
 
-    with tf.GradientTape(watch_accessed_variables=False) as g1:
+    # # flatten batch dimensions
+    # z = tf.reshape(z, (-1, d_z))
+
+    with tf.GradientTape(watch_accessed_variables=False, persistent=True) as g1:
         g1.watch(z)
         with tf.GradientTape(watch_accessed_variables=False) as g2:
             g2.watch(z)
             f_z = fn(z)
         f_z_grad = g2.gradient(f_z, z)
-    f_z_hess = g1.batch_jacobian(f_z_grad, z)
+    f_z_hess = g1.batch_jacobian(f_z_grad, z)  # TODO: performs unneccesary computations
+    if len(batch_shape) == 1:
+        f_z_hess = tf.einsum("sbxby->sbxy", f_z_hess)
 
     # unflatten batch dimensions
-    f_z = tf.reshape(f_z, batch_shape)
-    f_z_grad = tf.reshape(f_z_grad, batch_shape + (d_z,))
-    f_z_hess = tf.reshape(f_z_hess, batch_shape + (d_z, d_z))
+    # f_z = tf.reshape(f_z, (n_samples,) + batch_shape)
+    # f_z_grad = tf.reshape(f_z_grad, (n_samples,) + batch_shape + (d_z,))
+    # f_z_hess = tf.reshape(f_z_hess, (n_samples,) + batch_shape + (d_z, d_z))
 
     return f_z, f_z_grad, f_z_hess
 
@@ -303,8 +331,8 @@ def expectation_prod_neg(log_a_z: tf.Tensor, b_z: tf.Tensor):
     be the sample dimension
     """
     ## check inputs
-    n_samples = tf.cast(tf.shape(log_a_z)[0], tf.float32)
-    # assert b_z.shape[0] == log_a_z.shape[0] == n_samples  # not allowed in graph mode
+    n_samples = log_a_z.shape[0]
+    assert b_z.shape[0] == n_samples
 
     ## compute expectation
     expectation, signs = tfp.math.reduce_weighted_logsumexp(
@@ -322,7 +350,10 @@ def expectation_prod_neg(log_a_z: tf.Tensor, b_z: tf.Tensor):
     return expectation
 
 
-def compute_S_bar(z, mu, prec, log_tgt_post_grad):
+@tf.function
+def compute_S_bar(
+    z: tf.Tensor, mu: tf.Tensor, prec: tf.Tensor, log_tgt_post_grad: tf.Tensor
+):
     """
     compute S_bar = prec * (z - mu) * (-log_tgt_post_grad)
     """
@@ -347,6 +378,7 @@ def compute_S_bar(z, mu, prec, log_tgt_post_grad):
     return S_bar
 
 
+@tf.function
 def log_w_to_log_omega(log_w: tf.Tensor):
     """
     Compute log_omega from log_w.
@@ -363,6 +395,7 @@ def log_w_to_log_omega(log_w: tf.Tensor):
     return log_omega
 
 
+@tf.function
 def log_omega_to_log_w(log_omega: tf.Tensor):
     """
     Compute log_w from log_omega.
