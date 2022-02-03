@@ -6,6 +6,7 @@ import tensorflow as tf
 import tensorflow_probability as tfp
 from i_bayes_rule.i_bayesian_learning_rule_gmm import i_bayesian_learning_rule_gmm
 from i_bayes_rule.lnpdf import make_simple_target, make_star_target, make_target
+from aggbyopt_nps.np import create_initial_gmm_parameters
 
 
 # def create_initial_model(n_tasks, d_z, n_components, prior_scale, initial_cov=None):
@@ -38,30 +39,6 @@ from i_bayes_rule.lnpdf import make_simple_target, make_star_target, make_target
 #         covs[i] = initial_cov
 
 #     return weights, means, covs
-
-
-def create_initial_gmm_parameters(
-    d_z: int,
-    n_tasks: int,
-    n_components: int,
-    prior_scale: float,
-):
-    # TODO: check more sophisticated initializations
-    prior = tfp.distributions.Normal(
-        loc=tf.zeros(d_z), scale=prior_scale * tf.ones(d_z)
-    )
-    initial_cov = prior_scale ** 2 * tf.eye(d_z)  # same as prior covariance
-
-    weights = tf.ones((n_tasks, n_components)) / n_components
-    means = prior.sample((n_tasks, n_components))
-    covs = tf.stack([initial_cov] * n_components, axis=0)
-    covs = tf.stack([covs] * n_tasks, axis=0)
-
-    # check output
-    assert weights.shape == (n_tasks, n_components)
-    assert means.shape == (n_tasks, n_components, d_z)
-    assert covs.shape == (n_tasks, n_components, d_z, d_z)
-    return weights, means, covs
 
 
 def plot2d(target_dist, model, fig, axes, block=False):
@@ -150,9 +127,7 @@ def main():
     config["n_iter"] = int(1e4)
     config["n_samples_per_iter"] = 50
     config["lr_mu_prec"] = 0.01
-    config["lr_mu_prec_gamma"] = -1.0
     config["lr_w"] = 0.05 * config["lr_mu_prec"]
-    config["lr_w_gamma"] = -1.0
 
     ## seed everything
     np.random.seed(config["seed"])
