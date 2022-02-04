@@ -2,6 +2,7 @@ import tensorflow as tf
 import tensorflow_probability as tfp
 from i_bayes_rule.i_bayesian_learning_rule_gmm import step as gmm_learner_step
 from i_bayes_rule.util import GMM
+from matplotlib import pyplot as plt
 from tensorflow import keras
 from tqdm import tqdm
 
@@ -41,6 +42,8 @@ class NP:
         self.gmm = None
 
     def reset_gmm(self, n_tasks: int):
+        # TODO: in order to learn a prior, this has to be deterministic and the
+        #  same for each task!
         self.n_tasks = n_tasks
         gmm_weights, gmm_means, gmm_covs = create_initial_gmm_parameters(
             n_tasks=n_tasks,
@@ -56,37 +59,46 @@ class NP:
         )
 
     @tf.function
-    def log_likelihood(self, x_tgt: tf.Tensor, y_tgt: tf.Tensor, z: tf.Tensor):
+    def predict(self, x: tf.Tensor, z: tf.Tensor):
+        # check input
+        n_points = x.shape[1]
+        n_samples = z.shape[0]
+        assert x.shape == (self.n_tasks, n_points, self.d_x)
+        assert z.shape == (n_samples, self.n_tasks, self.d_z)
+
+        # TODO: do we need the broadcasting or can this be done automatically by keras?
+        x = tf.broadcast_to(x[None, ...], (n_samples, self.n_tasks, n_points, self.d_x))
+        z = tf.broadcast_to(
+            z[..., None, :], (n_samples, self.n_tasks, n_points, self.d_z)
+        )
+        xz = tf.concat((x, z), axis=-1)
+        assert xz.shape == (n_samples, self.n_tasks, n_points, self.d_x + self.d_z)
+        mu = self.decoder(xz)
+
+        # check output
+        assert mu.shape == (n_samples, self.n_tasks, n_points, self.d_y)
+        return mu
+
+    @tf.function
+    def log_likelihood(self, x: tf.Tensor, y: tf.Tensor, z: tf.Tensor):
         """
         log p(D^t | z, theta)
         """
         # check input
-        n_points = x_tgt.shape[1]
+        n_points = x.shape[1]
         n_samples = z.shape[0]
-        assert x_tgt.shape == (self.n_tasks, n_points, self.d_x)
-        assert y_tgt.shape == (self.n_tasks, n_points, self.d_y)
+        assert x.shape == (self.n_tasks, n_points, self.d_x)
+        assert y.shape == (self.n_tasks, n_points, self.d_y)
         assert z.shape == (n_samples, self.n_tasks, self.d_z)
 
         # compute log likelihood
-        # TODO: do we need the broadcasting or can this be done automatically by keras?
-        x_tgt = tf.broadcast_to(
-            x_tgt[None, ...], (n_samples, self.n_tasks, n_points, self.d_x)
-        )
-        y_tgt = tf.broadcast_to(
-            y_tgt[None, ...], (n_samples, self.n_tasks, n_points, self.d_y)
-        )
-        z = tf.broadcast_to(
-            z[..., None, :], (n_samples, self.n_tasks, n_points, self.d_z)
-        )
-        xz = tf.concat((x_tgt, z), axis=-1)
-        assert xz.shape == (n_samples, self.n_tasks, n_points, self.d_x + self.d_z)
-        mu = self.decoder(xz)
-        assert mu.shape == (n_samples, self.n_tasks, n_points, self.d_y)
+        y = tf.broadcast_to(y[None, ...], (n_samples, self.n_tasks, n_points, self.d_y))
+        mu = self.predict(x=x, z=z)
         gaussian = tfp.distributions.Independent(
             tfp.distributions.Normal(loc=mu, scale=self.decoder_output_scale),
             reinterpreted_batch_ndims=1,  # sum ll of data dim upon calling log_prob
         )
-        log_likelihood = gaussian.log_prob(y_tgt)
+        log_likelihood = gaussian.log_prob(y)
         log_likelihood = tf.reduce_sum(log_likelihood, axis=-1)  # sum ll of datapoints
 
         # check output
@@ -110,19 +122,19 @@ class NP:
         return log_density
 
     @tf.function
-    def log_density(self, x_tgt: tf.Tensor, y_tgt: tf.Tensor, z: tf.Tensor):
+    def log_density(self, x: tf.Tensor, y: tf.Tensor, z: tf.Tensor):
         """
         log p(D^t | z, theta) + log p(z | D^c, theta)
         """
         # check input
-        n_points = x_tgt.shape[1]
+        n_points = x.shape[1]
         n_samples = z.shape[0]
-        assert x_tgt.shape == (self.n_tasks, n_points, self.d_x)
-        assert y_tgt.shape == (self.n_tasks, n_points, self.d_y)
+        assert x.shape == (self.n_tasks, n_points, self.d_x)
+        assert y.shape == (self.n_tasks, n_points, self.d_y)
         assert z.shape == (n_samples, self.n_tasks, self.d_z)
 
         # compute log_density
-        log_likelihood = self.log_likelihood(x_tgt=x_tgt, y_tgt=y_tgt, z=z)
+        log_likelihood = self.log_likelihood(x=x, y=y, z=z)
         assert log_likelihood.shape == (n_samples, self.n_tasks)
         log_conditional_prior_density = self.log_conditional_prior_density(z=z)
         assert log_conditional_prior_density.shape == (n_samples, self.n_tasks)
@@ -133,6 +145,13 @@ class NP:
         return log_density
 
     @tf.function
+    def log_density_self_data(self, z: tf.Tensor):
+        # This function can be passed to gradient/hessian computations without
+        # building a lambda function.
+        return self.log_density(x=self.x_tgt, y=self.y_tgt, z=z)
+
+    # @tf.function
+    # TODO: decorating this with tf.function does not allow to change n_tasks
     def sample_z(self, n_samples: int):
         z = self.gmm.sample(n_samples=n_samples)
 
@@ -160,11 +179,12 @@ class ConditionalPriorLearner:
         assert y_ctx.shape == (self.model.n_tasks, n_points_ctx, self.model.d_y)
 
         ## step
+        # TODO: is there a better way than setting model attributes here?
+        self.model.x_tgt = x_tgt
+        self.model.y_tgt = y_tgt
         model, _ = gmm_learner_step(
             model=self.model.gmm,
-            target_density_fn=lambda z: self.model.log_density(
-                x_tgt=x_tgt, y_tgt=y_tgt, z=z
-            ),
+            target_density_fn=self.model.log_density_self_data,
             n_samples=self.n_samples,
             lr_w=self.lr_w,
             lr_mu_prec=self.lr_mu_prec,
@@ -192,7 +212,7 @@ class LikelihoodLearner:
         assert z.shape == (self.n_samples, self.model.n_tasks, self.model.d_z)
         with tf.GradientTape() as tape:
             # compute likelihood
-            ll = self.model.log_likelihood(x_tgt=x_tgt, y_tgt=y_tgt, z=z)
+            ll = self.model.log_likelihood(x=x_tgt, y=y_tgt, z=z)
             assert ll.shape == (self.n_samples, self.model.n_tasks)
             # compute loss
             loss = -tf.math.log(tf.cast(self.n_samples, tf.float32))
@@ -273,7 +293,7 @@ def shuffle_and_split(batch, n_ctx):
     return x_ctx, y_ctx, x_tgt, y_tgt
 
 
-def meta_train_np(config: dict, meta_dataset: tf.data.Dataset, callback=None):
+def meta_train_np(config: dict, dataset_meta: tf.data.Dataset, callback=None):
     # create learners
     np_model = NP(
         d_x=config["d_x"],
@@ -298,23 +318,76 @@ def meta_train_np(config: dict, meta_dataset: tf.data.Dataset, callback=None):
     )
 
     # batch dataset
-    meta_dataset = meta_dataset.shuffle(buffer_size=config["batch_size"])
-    meta_dataset = meta_dataset.batch(config["batch_size"])
-    meta_dataset = meta_dataset.repeat(config["n_iter"])
+    # TODO: implement shuffling and batching without having to call np_model.reset
+    #  -> store all task-GMMs by index
+    # meta_dataset = meta_dataset.shuffle(buffer_size=config["batch_size"])
     # TODO: check shuffle
+    # batched version not implemented yet
+    assert config["batch_size"] == config["n_task_meta"]
+    dataset_meta = dataset_meta.batch(config["batch_size"])
+    # dataset_meta = dataset_meta.repeat(config["n_iter"]) # not implemented
 
-    # train
-    for batch in meta_dataset:
-        x_tgt, y_tgt, x_ctx, y_ctx = shuffle_and_split(
+    # load data
+    for batch in dataset_meta:
+        x_ctx, y_ctx, x_tgt, y_tgt = shuffle_and_split(
             batch=batch, n_ctx=config["n_context"]
         )
+        assert (
+            x_tgt.shape[0] == config["n_task_meta"]
+        )  # batched version not implemented
 
-        np_model.reset_gmm(n_tasks=x_tgt.shape[0])
-        for _ in tqdm(range(config["steps_per_batch"])):
-            cp_learner.step(x_tgt=x_tgt, y_tgt=y_tgt, x_ctx=x_ctx, y_ctx=y_ctx)
-            th_learner.step(x_tgt=x_tgt, y_tgt=y_tgt)
-
+    # train model
+    np_model.reset_gmm(n_tasks=config["n_task_meta"])
+    for _ in tqdm(range(config["steps_per_iter"])):
+        cp_learner.step(x_tgt=x_tgt, y_tgt=y_tgt, x_ctx=x_ctx, y_ctx=y_ctx)
+        th_learner.step(x_tgt=x_tgt, y_tgt=y_tgt)
         if callback is not None:
             callback(iter=iter, np_model=np_model)
 
     return np_model
+
+
+def test_np(config: dict, np_model: NP, dataset_test: tf.data.Dataset, n_context: int):
+    cp_learner = ConditionalPriorLearner(
+        model=np_model,
+        lr_w=config["gmm_learner_lr_w"],
+        lr_mu_prec=config["gmm_learner_lr_mu_prec"],
+        n_samples=config["gmm_learner_n_samples"],
+    )
+    n_task = config["n_task_test"]
+
+    # generate some prediction plots
+    dataset_test = dataset_test.batch(n_task)
+
+    # load data
+    np_model.reset_gmm(n_tasks=n_task)
+    for batch in dataset_test:
+        x_ctx, y_ctx, x_tgt, y_tgt = shuffle_and_split(batch=batch, n_ctx=n_context)
+
+    # adapt model
+    for _ in tqdm(range(config["steps_per_iter"])):
+        cp_learner.step(x_tgt=x_tgt, y_tgt=y_tgt, x_ctx=x_ctx, y_ctx=y_ctx)
+
+    # make predictions
+    n_plt_tasks = config["n_task_test"]
+    n_samples = 10
+    z = np_model.sample_z(n_samples=n_samples)
+    x_plt = tf.linspace(tf.reduce_min(x_tgt), tf.reduce_max(x_tgt), 128)
+    x_plt = tf.reshape(x_plt, (-1, 1))
+    x_plt = tf.repeat(x_plt[None, :, :], repeats=n_task, axis=0)
+    mu_pred = np_model.predict(x=x_plt, z=z)
+    fig, axes = plt.subplots(
+        nrows=n_plt_tasks, ncols=1, squeeze=False, sharex=True, sharey=True
+    )
+    for i in range(n_plt_tasks):
+        ax = axes[i, 0]
+        for j in range(n_samples):
+            ax.plot(x_plt[i], mu_pred[j, i], label="pred")
+        ax.scatter(x_tgt[i], y_tgt[i], label="ground truth")
+        ax.scatter(x_ctx[i], y_ctx[i], label="context")
+        ax.grid()
+        ax.set_xlabel("$x$")
+        ax.set_ylabel("$y$")
+    plt.show()
+
+    asdf: check that all functions decorated with tf.function always are called with the same tensor-shapes!
