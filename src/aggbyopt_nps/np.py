@@ -217,18 +217,6 @@ class PosteriorLearner:
             prec_method="hessian",
         )
 
-class GMMLearner:
-    def __init__(self, gmm_model, target_density_fn, config):
-        pass
-
-    def step():
-
-        gmm_model.log_w = new_log_w
-        gmm_model.mu = new_mu
-        gmm_model.cov = new_cov
-
-        pass
-
 
 class LikelihoodLearner:
     def __init__(self, model: NP, lr: float, n_samples: int):
