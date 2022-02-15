@@ -8,6 +8,9 @@ from tqdm import tqdm
 
 
 # TODO: check that all functions decorated with tf.function always are called with the same tensor-shapes!
+# TODO: normalize data
+
+
 class NP:
     """
     p(D^t | D^c, theta) = \int p(D^t | z, theta) p(z | D^c, theta) dz
@@ -390,4 +393,3 @@ def test_np(config: dict, np_model: NP, dataset_test: tf.data.Dataset, n_context
         ax.set_xlabel("$x$")
         ax.set_ylabel("$y$")
     plt.show()
-
