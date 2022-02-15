@@ -60,6 +60,7 @@ def i_bayesian_learning_rule_gmm(
                 lr_w=config["lr_w"],
                 lr_mu_prec=config["lr_mu_prec"],
                 prec_method=config["prec_update_method"],
+                use_autograd_for_model=config["use_autograd_for_model"],
             )
             # update n_fevals_total
             # TODO: what does n_fevals actually count
@@ -136,6 +137,7 @@ def step(
     lr_w,
     lr_mu_prec,
     prec_method,
+    use_autograd_for_model,
 ):
     # check input
     n_components = model.log_w.shape[-1]
@@ -160,16 +162,23 @@ def step(
     assert log_tgt_density_grad.shape == (n_samples,) + batch_shape + (d_z,)
     if compute_hess:
         assert log_tgt_density_hess.shape == (n_samples,) + batch_shape + (d_z, d_z)
-    n_feval = z.shape[0]  # TODO: is this correct?
+    n_feval = np.product(z.shape[:-1])  # TODO: is this correct?
 
     ## evaluate the GMM model, and its gradient + hessian at samples
-    (
-        log_model_density,
-        log_model_density_grad,
-        log_model_density_hess,
-    ) = eval_fn_grad_hess(
-        fn=model.log_density, z=z, compute_grad=True, compute_hess=True
-    )
+    if use_autograd_for_model:
+        (
+            log_model_density,
+            log_model_density_grad,
+            log_model_density_hess,
+        ) = eval_fn_grad_hess(
+            fn=model.log_density, z=z, compute_grad=True, compute_hess=True
+        )
+    else:
+        (
+            log_model_density,
+            log_model_density_grad,
+            log_model_density_hess,
+        ) = model.eval_density_grad_hess(z=z, compute_grad=True, compute_hess=True)
     assert log_model_density.shape == (n_samples,) + batch_shape
     assert log_model_density_grad.shape == (n_samples,) + batch_shape + (d_z,)
     assert log_model_density_hess.shape == (n_samples,) + batch_shape + (d_z, d_z)
@@ -356,11 +365,11 @@ def compute_g_reparam(
     n_components = log_delta_z.shape[-1]
     batch_shape = log_delta_z.shape[1:-1]
     d_z = log_target_density_grad.shape[-1]
-    assert z.shape == n_samples + batch_shape + (d_z,)
+    assert z.shape == (n_samples,) + batch_shape + (d_z,)
     assert mu.shape == batch_shape + (n_components, d_z)
     assert prec.shape == batch_shape + (n_components, d_z, d_z)
     assert log_delta_z.shape == (n_samples,) + batch_shape + (n_components,)
-    assert log_target_density_grad.shape == (n_samples,) + batch_shape + (d_z, d_z)
+    assert log_target_density_grad.shape == (n_samples,) + batch_shape + (d_z,)
     assert log_model_density_hess.shape == (n_samples,) + batch_shape + (d_z, d_z)
 
     ## compute g = -E_q[delta(z) * ((S_bar + S_bar^T)/2 + d^2/dz^2 log(q(z))]

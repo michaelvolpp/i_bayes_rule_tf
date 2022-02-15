@@ -101,44 +101,44 @@ def cov_to_scale_tril(cov: tf.Tensor):
 #     return prec
 
 
-@tf.function
-def sample_categorical(n_samples: int, log_w: tf.Tensor):
-    # check input
-    batch_shape = log_w.shape[:-1]
+# @tf.function
+# def sample_categorical(n_samples: int, log_w: tf.Tensor):
+#     # check input
+#     batch_shape = log_w.shape[:-1]
 
-    # sample categorical
-    thresholds = tf.cumsum(tf.exp(log_w), axis=-1)
-    eps = tf.random.uniform(shape=(n_samples,) + batch_shape)
-    samples = tf.argmax(
-        eps[..., None] < thresholds[None, ...],
-        axis=-1,
-        output_type=tf.int32,
-    )
+#     # sample categorical
+#     thresholds = tf.cumsum(tf.exp(log_w), axis=-1)
+#     eps = tf.random.uniform(shape=(n_samples,) + batch_shape)
+#     samples = tf.argmax(
+#         eps[..., None] < thresholds[None, ...],
+#         axis=-1,
+#         output_type=tf.int32,
+#     )
 
-    # check output
-    assert samples.shape == (n_samples,) + batch_shape
-    return samples
+#     # check output
+#     assert samples.shape == (n_samples,) + batch_shape
+#     return samples
 
 
-@tf.function
-def sample_gaussian(n_samples: int, loc: tf.Tensor, scale_tril: tf.Tensor):
-    # check input
-    batch_shape = loc.shape[:-1]
-    d_z = loc.shape[-1]
-    assert loc.shape == batch_shape + (d_z,)
-    assert scale_tril.shape == batch_shape + (d_z, d_z)
+# @tf.function
+# def sample_gaussian(n_samples: int, loc: tf.Tensor, scale_tril: tf.Tensor):
+#     # check input
+#     batch_shape = loc.shape[:-1]
+#     d_z = loc.shape[-1]
+#     assert loc.shape == batch_shape + (d_z,)
+#     assert scale_tril.shape == batch_shape + (d_z, d_z)
 
-    # sample
-    samples = tf.einsum(
-        "...ij,s...j->s...i",
-        scale_tril,
-        tf.random.normal((n_samples,) + batch_shape + (d_z,), mean=0.0, stddev=1.0),
-    )
-    samples = samples + loc[None, ...]
+#     # sample
+#     samples = tf.einsum(
+#         "...ij,s...j->s...i",
+#         scale_tril,
+#         tf.random.normal((n_samples,) + batch_shape + (d_z,), mean=0.0, stddev=1.0),
+#     )
+#     samples = samples + loc[None, ...]
 
-    # check output
-    assert samples.shape == (n_samples,) + batch_shape + (d_z,)
-    return samples
+#     # check output
+#     assert samples.shape == (n_samples,) + batch_shape + (d_z,)
+#     return samples
 
 
 @tf.function
@@ -152,6 +152,7 @@ def sample_gmm(n_samples: int, log_w: tf.Tensor, loc: tf.Tensor, scale_tril: tf.
     assert scale_tril.shape == batch_shape + (n_components, d_z, d_z)
 
     # sample gmm
+    # TODO: this is quite slow
     samples = tfp.distributions.MixtureSameFamily(
         mixture_distribution=tfp.distributions.Categorical(
             logits=log_w, validate_args=False
@@ -162,8 +163,8 @@ def sample_gmm(n_samples: int, log_w: tf.Tensor, loc: tf.Tensor, scale_tril: tf.
         validate_args=False,
     ).sample(n_samples)
 
-    # TODO: write this without using tfp.distributions?
-    # non-batched code
+    # # TODO: write this without using tfp.distributions?
+    # # non-batched code
     # sampled_components = sample_categorical(n_samples=n_samples, log_w=log_w)
     # samples = tf.zeros((n_samples,) + batch_shape + (d_z,))
     # for i in range(n_components):
@@ -212,6 +213,116 @@ def gmm_log_component_densities(z: tf.Tensor, loc: tf.Tensor, scale_tril: tf.Ten
 
 @tf.function
 def gmm_log_density(
+    z: tf.Tensor,
+    log_w: tf.Tensor,
+    log_component_densities: tf.Tensor,
+):
+    # check input
+    n_samples = z.shape[0]
+    d_z = z.shape[-1]
+    n_components = log_w.shape[-1]
+    batch_shape = log_w.shape[:-1]
+    assert z.shape == (n_samples,) + batch_shape + (d_z,)
+    assert log_w.shape == batch_shape + (n_components,)
+    assert log_component_densities.shape == (n_samples,) + batch_shape + (n_components,)
+
+    # compute log density
+    log_joint_densities = log_component_densities + log_w[None, ...]
+    assert log_joint_densities.shape == (n_samples,) + batch_shape + (n_components,)
+    log_density = tf.reduce_logsumexp(log_joint_densities, axis=-1)
+
+    # check output
+    assert log_density.shape == (n_samples,) + batch_shape
+    return log_density
+
+
+@tf.function
+def gmm_log_responsibilities(
+    z: tf.Tensor,
+    log_w: tf.Tensor,
+    log_component_densities: tf.Tensor,
+    log_density: tf.Tensor,
+):
+    # check input
+    n_samples = z.shape[0]
+    d_z = z.shape[-1]
+    n_components = log_w.shape[-1]
+    batch_shape = log_w.shape[:-1]
+    assert z.shape == (n_samples,) + batch_shape + (d_z,)
+    assert log_w.shape == batch_shape + (n_components,)
+    assert log_density.shape == (n_samples,) + batch_shape
+    assert log_component_densities.shape == (n_samples,) + batch_shape + (n_components,)
+
+    # compute log density and responsibilities
+    log_joint_densities = log_component_densities + log_w[None, ...]
+    assert log_joint_densities.shape == (n_samples,) + batch_shape + (n_components,)
+    log_responsibilities = log_joint_densities - log_density[..., None]
+
+    # check output
+    assert log_responsibilities.shape == (n_samples,) + batch_shape + (n_components,)
+    return log_responsibilities
+
+
+def gmm_log_density_grad_hess(
+    z: tf.Tensor,
+    log_w: tf.Tensor,
+    loc: tf.Tensor,
+    prec: tf.Tensor,  # TODO: unify usage of prec, cov, scale_tril
+    scale_tril: tf.Tensor,  # TODO: unify usage of prec, cov, scale_tril
+    compute_grad: bool,
+    compute_hess: bool,
+):
+    # check input
+    n_samples = z.shape[0]
+    d_z = loc.shape[-1]
+    n_components = loc.shape[-2]
+    batch_shape = loc.shape[:-2]
+    assert z.shape == (n_samples,) + batch_shape + (d_z,)
+    assert log_w.shape == batch_shape + (n_components,)
+    assert loc.shape == batch_shape + (n_components, d_z)
+    assert prec.shape == batch_shape + (n_components, d_z, d_z)
+    assert not (compute_hess and not compute_grad)
+
+    # compute log_density, and log_responsibilities
+    log_density, log_component_densities = _gmm_log_density_and_log_component_densities(
+        z=z, log_w=log_w, loc=loc, scale_tril=scale_tril
+    )
+
+    # compute gradient
+    if compute_grad:
+        log_density_grad, log_responsibilities, prec_times_diff = _gmm_log_density_grad(
+            z=z,
+            log_w=log_w,
+            loc=loc,
+            prec=prec,
+            log_density=log_density,
+            log_component_densities=log_component_densities,
+        )
+    else:
+        log_density_grad = None
+
+    # compute Hessian
+    if compute_hess:
+        log_density_hess = _gmm_log_density_hess(
+            prec=prec,
+            log_responsibilities=log_responsibilities,
+            prec_times_diff=prec_times_diff,
+            log_density_grad=log_density_grad,
+        )
+    else:
+        log_density_hess = None
+
+    # check output
+    assert log_density.shape == (n_samples,) + batch_shape
+    if compute_grad:
+        assert log_density_grad.shape == (n_samples,) + batch_shape + (d_z,)
+    if compute_hess:
+        assert log_density_hess.shape == (n_samples,) + batch_shape + (d_z, d_z)
+    return log_density, log_density_grad, log_density_hess
+
+
+@tf.function
+def _gmm_log_density_and_log_component_densities(
     z: tf.Tensor, log_w: tf.Tensor, loc: tf.Tensor, scale_tril: tf.Tensor
 ):
     # check input
@@ -224,16 +335,121 @@ def gmm_log_density(
     assert loc.shape == batch_shape + (n_components, d_z)
     assert scale_tril.shape == batch_shape + (n_components, d_z, d_z)
 
-    # compute log density
-    log_densities = gmm_log_component_densities(z=z, loc=loc, scale_tril=scale_tril)
-    assert log_densities.shape == (n_samples,) + batch_shape + (n_components,)
-    log_weighted_densities = log_densities + log_w[None, ...]
-    assert log_weighted_densities.shape == (n_samples,) + batch_shape + (n_components,)
-    log_density = tf.reduce_logsumexp(log_weighted_densities, axis=-1)
+    # compute log component densities and log density
+    log_component_densities = gmm_log_component_densities(
+        z=z,
+        loc=loc,
+        scale_tril=scale_tril,
+    )
+    log_density = gmm_log_density(
+        z=z,
+        log_w=log_w,
+        log_component_densities=log_component_densities,
+    )
 
     # check output
     assert log_density.shape == (n_samples,) + batch_shape
-    return log_density
+    assert log_component_densities.shape == (n_samples,) + batch_shape + (n_components,)
+    return log_density, log_component_densities
+
+
+@tf.function
+def _gmm_log_density_grad(
+    z: tf.Tensor,
+    log_w: tf.Tensor,
+    loc: tf.Tensor,
+    prec: tf.Tensor,
+    log_density: tf.Tensor,
+    log_component_densities: tf.Tensor,
+):
+    # check input
+    n_samples = z.shape[0]
+    d_z = loc.shape[-1]
+    n_components = loc.shape[-2]
+    batch_shape = loc.shape[:-2]
+    assert z.shape == (n_samples,) + batch_shape + (d_z,)
+    assert log_w.shape == batch_shape + (n_components,)
+    assert loc.shape == batch_shape + (n_components, d_z)
+    assert prec.shape == batch_shape + (n_components, d_z, d_z)
+    assert log_density.shape == (n_samples,) + batch_shape
+    assert log_component_densities.shape == (n_samples,) + batch_shape + (n_components,)
+
+    # compute d/dz log q(z)
+    log_responsibilities = gmm_log_responsibilities(
+        z=z,
+        log_w=log_w,
+        log_density=log_density,
+        log_component_densities=log_component_densities,
+    )
+    assert log_responsibilities.shape == (n_samples,) + batch_shape + (n_components,)
+    prec_times_diff = loc[None, ...] - z[..., None, :]
+    assert prec_times_diff.shape == (n_samples,) + batch_shape + (n_components, d_z)
+    prec_times_diff = tf.einsum("...ij,s...j->s...i", prec, prec_times_diff)
+    assert prec_times_diff.shape == (n_samples,) + batch_shape + (n_components, d_z)
+    # sum over components
+    log_density_grad, signs = tfp.math.reduce_weighted_logsumexp(
+        logx=log_responsibilities[..., None]
+        + tf.math.log(tf.math.abs(prec_times_diff)),
+        w=tf.math.sign(prec_times_diff),
+        axis=-2,
+        return_sign=True,
+    )
+    log_density_grad = tf.math.exp(log_density_grad) * signs
+
+    # check output
+    assert log_density_grad.shape == (n_samples,) + batch_shape + (d_z,)
+    assert log_responsibilities.shape == (n_samples,) + batch_shape + (n_components,)
+    assert prec_times_diff.shape == (n_samples,) + batch_shape + (n_components, d_z)
+    return log_density_grad, log_responsibilities, prec_times_diff
+
+
+@tf.function
+def _gmm_log_density_hess(
+    prec: tf.Tensor,
+    log_responsibilities: tf.Tensor,
+    prec_times_diff: tf.Tensor,
+    log_density_grad: tf.Tensor,
+):
+    # check input
+    n_samples = log_responsibilities.shape[0]
+    n_components = log_responsibilities.shape[-1]
+    batch_shape = log_responsibilities.shape[1:-1]
+    d_z = log_density_grad.shape[-1]
+    assert prec.shape == batch_shape + (n_components, d_z, d_z)
+    assert log_responsibilities.shape == (n_samples,) + batch_shape + (n_components,)
+    assert prec_times_diff.shape == (n_samples,) + batch_shape + (n_components, d_z)
+    assert log_density_grad.shape == (n_samples,) + batch_shape + (d_z,)
+
+    # compute Hessian
+    log_density_hess = prec_times_diff - log_density_grad[..., None, :]
+    assert log_density_hess.shape == (n_samples,) + batch_shape + (n_components, d_z)
+    log_density_hess = tf.einsum(
+        "s...ki,s...kj->s...kij", log_density_hess, prec_times_diff
+    )
+    assert log_density_hess.shape == (n_samples,) + batch_shape + (
+        n_components,
+        d_z,
+        d_z,
+    )
+    log_density_hess = log_density_hess - prec[None, ...]
+    assert log_density_hess.shape == (n_samples,) + batch_shape + (
+        n_components,
+        d_z,
+        d_z,
+    )
+    # sum over components
+    log_density_hess, signs = tfp.math.reduce_weighted_logsumexp(
+        logx=log_responsibilities[..., None, None]
+        + tf.math.log(tf.math.abs(log_density_hess)),
+        w=tf.math.sign(log_density_hess),
+        axis=-3,
+        return_sign=True,
+    )
+    log_density_hess = tf.math.exp(log_density_hess) * signs
+
+    # check output
+    assert log_density_hess.shape == (n_samples,) + batch_shape + (d_z, d_z)
+    return log_density_hess
 
 
 def eval_fn_grad_hess(fn, z: tf.Tensor, compute_grad: bool, compute_hess: bool):
@@ -282,12 +498,12 @@ def _eval_fn_grad(fn, z: tf.Tensor):
 @tf.function
 def _eval_fn_grad_hess(fn, z: tf.Tensor):
     # TODO: fully batch the Hessian computation
-    #  The problem is that batch_jacobian allows only one batch dimension. If 
-    #  multiple batch dimensions (e.g., sample-dim and task-dim) are present, 
+    #  The problem is that batch_jacobian allows only one batch dimension. If
+    #  multiple batch dimensions (e.g., sample-dim and task-dim) are present,
     #  batch jacobian does unneccesary computations akin to the ones described
     #  here: https://www.tensorflow.org/guide/advanced_autodiff#batch_jacobian
     #  Flattening the batch-dims **after** gradient computation and before calling
-    #  batch jacobian is not an option as tf creates new variables for reshaped 
+    #  batch jacobian is not an option as tf creates new variables for reshaped
     #  variables, losing track of gradients.
     #  Flattening the batch-dims **before** all computations is not an option
     #  because fn(z) has to be called with correct batch dims, as in general
@@ -328,7 +544,7 @@ def expectation_prod_neg(log_a_z: tf.Tensor, b_z: tf.Tensor):
     Compute the expectation E_q[a(z) * b(z)] \approx 1/S \sum_s a(z_s) b(z_s) in a
     stable manner, where z_s is sampled from q, and S is the number of samples.
     b(z_s) may contain negative or zero entries. The 0th dimension is assumed to
-    be the sample dimension
+    be the sample dimension.
     """
     ## check inputs
     n_samples = log_a_z.shape[0]
@@ -501,11 +717,26 @@ class GMM:
     @tf.function
     def log_density(self, z: tf.Tensor):
         return gmm_log_density(
-            z=z, log_w=self.log_w, loc=self.loc, scale_tril=self.scale_tril
+            z=z,
+            log_w=self.log_w,
+            log_component_densities=self.log_component_densities(z=z),
         )
 
     @tf.function
     def log_component_densities(self, z: tf.Tensor):
         return gmm_log_component_densities(
             z=z, loc=self.loc, scale_tril=self.scale_tril
+        )
+
+    def eval_density_grad_hess(
+        self, z: tf.Tensor, compute_grad: bool, compute_hess: bool
+    ):
+        return gmm_log_density_grad_hess(
+            z=z,
+            log_w=self.log_w,
+            loc=self.loc,
+            prec=self.prec,
+            scale_tril=self.scale_tril,
+            compute_grad=compute_grad,
+            compute_hess=compute_hess,
         )
