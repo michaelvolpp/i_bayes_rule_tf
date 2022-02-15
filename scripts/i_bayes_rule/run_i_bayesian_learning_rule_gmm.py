@@ -69,8 +69,21 @@ def plot2d(target_dist, model, fig, axes, block=False):
     # evaluate distributions
     p_tgt = np.exp(target_dist.log_density(xy_tf).numpy())
     p_model = np.exp(model.log_density(xy_tf).numpy())
-    weights = np.exp(model.log_w.numpy())
 
+    # extract gmm parameters
+    weights = np.exp(model.log_w.numpy())
+    locs = model.loc.numpy()
+    scale_trils = model.scale_tril.numpy()
+
+    # add task dimension also if n_tasks == 1
+    if n_tasks == 1:
+        p_tgt = p_tgt[:, None]
+        p_model = p_model[:, None]
+        weights = weights[None, :]
+        scale_trils = scale_trils[None, :, :]
+        locs = locs[None, :]
+
+    # plot
     for l in range(n_tasks):
         # plot target distribution
         ax = axes[0, l]
@@ -89,10 +102,12 @@ def plot2d(target_dist, model, fig, axes, block=False):
         for k in range(model.n_components):
             color = next(ax._get_lines.prop_cycler)["color"]
             colors.append(color)
-            scale_tril = model.scale_tril[l, k].numpy()
-            mean = model.loc[l, k].numpy()
-            ax.scatter(x=mean[0], y=mean[1])
-            plot_gaussian_ellipse(ax=ax, mean=mean, scale_tril=scale_tril, color=color)
+            cur_scale_tril = scale_trils[l, k]
+            cur_loc = locs[l, k]
+            ax.scatter(x=cur_loc[0], y=cur_loc[1])
+            plot_gaussian_ellipse(
+                ax=ax, mean=cur_loc, scale_tril=cur_scale_tril, color=color
+            )
         ax.axis("scaled")
         ax.set_title("Model density")
         ax.set_xlabel("$z_1$")
@@ -120,14 +135,14 @@ def main():
     config["seed"] = 123
     config["log_interval"] = 500  # how often the parameters are written to npz files
     config["callback_interval"] = 500  # how often the callback is called
-    config["n_dimensions_model"] = 2
-    # config["prec_update_method"] = "reparam"
-    config["prec_update_method"] = "hessian"
+    config["prec_update_method"] = "reparam"
+    # config["prec_update_method"] = "hessian"
     # The following are the standard parameters from Lin et al. (for the GMM-star exp)
     config["n_iter"] = int(1e4)
     config["n_samples_per_iter"] = 50
     config["lr_mu_prec"] = 0.01
     config["lr_w"] = 0.05 * config["lr_mu_prec"]
+    config["use_autograd_for_model"] = False
 
     ## seed everything
     np.random.seed(config["seed"])
@@ -135,21 +150,25 @@ def main():
 
     ## set number of tasks
     # TODO: adapt the other toy problems to more than one task!
-    n_tasks = 3
+    n_tasks = 1
 
     ## Create target dist (GMM): I tested the following target distributions/settings
     # (i) Simple toy target
-    config["savepath"] = os.path.join(scriptpath, "log", "toy_gmm")
-    config["n_components_model"] = 3
-    target_dist = make_simple_target(n_tasks=n_tasks)
+    # config["savepath"] = os.path.join(scriptpath, "log", "toy_gmm")
+    # config["n_components_model"] = 3
+    # config["n_dimensions_model"] = 2
+    # target_dist = make_simple_target(n_tasks=n_tasks)
     # (ii) Star-GMM from Lin et al. (Khan)
     # config["savepath"] = os.path.join(scriptpath, "log", "star_gmm")
     # config["n_components_model"] = 10
+    # config["n_dimensions_model"] = 2
     # target_dist = make_star_target(num_components=5)
     # (iii) Random GMM
-    # config["savepath"] = os.path.join(scriptpath, "log", "random_gmm")
-    # config["n_components_model"] = 3
-    # target_dist = make_target(num_dimensions=2)
+    config["savepath"] = os.path.join(scriptpath, "log", "random_gmm")
+    n_dimensions = 200
+    config["n_components_model"] = 3
+    config["n_dimensions_model"] = n_dimensions
+    target_dist = make_target(num_dimensions=n_dimensions)
 
     ## create initial GMM parameters
     w_init, mu_init, cov_init = create_initial_gmm_parameters(
@@ -160,10 +179,12 @@ def main():
     )
 
     ## define a callback function
-    callback = lambda model: plot2d(
-        model=model, target_dist=target_dist, fig=fig, axes=axes
-    )
-    # callback = None  # no callback
+    if config["n_dimensions_model"] == 2:
+        callback = lambda model: plot2d(
+            model=model, target_dist=target_dist, fig=fig, axes=axes
+        )
+    else:
+        callback = None  # no callback
 
     ## fit model
     fig, axes = plt.subplots(

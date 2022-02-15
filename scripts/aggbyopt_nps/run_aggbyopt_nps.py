@@ -135,7 +135,7 @@ def main():
     config["seed"] = 1234
     config["data_noise_std"] = 1.0
     config["n_task_meta"] = 16
-    config["n_datapoints_per_task_meta"] = 8
+    config["n_datapoints_per_task_meta"] = 16
     config["seed_task_meta"] = 1234
     config["seed_x_meta"] = 2234
     config["seed_noise_meta"] = 3234
@@ -145,7 +145,7 @@ def main():
     config["seed_x_test"] = 2235
     config["seed_noise_test"] = 3235
     config["d_z"] = 2
-    config["gmm_n_components"] = 3
+    config["gmm_n_components"] = 2
     config["gmm_prior_scale"] = 1.0
     config["gmm_learner_lr_mu_prec"] = 0.01
     config["gmm_learner_lr_w"] = 0.05 * config["gmm_learner_lr_mu_prec"]
@@ -160,7 +160,7 @@ def main():
     config["n_iter"] = 1
     config["n_steps_per_iter"] = 1000
     # TODO: how to adjust this?
-    config["n_theta_steps_per_gmm_step"] = 10
+    config["n_theta_steps_per_gmm_step"] = 1
 
     # load meta benchmark and generate dataset
     benchmark_meta = Affine1D(
@@ -191,7 +191,7 @@ def main():
     tf.random.set_seed(config["seed"])
 
     ## train
-    tf.config.run_functions_eagerly(True)  # only for debugging
+    # tf.config.run_functions_eagerly(True)  # only for debugging
     n_task_max = 4
     fig, axes = plt.subplots(nrows=4, ncols=n_task_max, squeeze=False, figsize=(15, 8))
     callback = lambda iteration, np_model, x, y: plot2d(

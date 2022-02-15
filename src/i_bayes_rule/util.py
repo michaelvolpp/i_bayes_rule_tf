@@ -152,6 +152,7 @@ def sample_gmm(n_samples: int, log_w: tf.Tensor, loc: tf.Tensor, scale_tril: tf.
     assert scale_tril.shape == batch_shape + (n_components, d_z, d_z)
 
     # sample gmm
+    # TODO: this is quite slow
     samples = tfp.distributions.MixtureSameFamily(
         mixture_distribution=tfp.distributions.Categorical(
             logits=log_w, validate_args=False
@@ -162,8 +163,8 @@ def sample_gmm(n_samples: int, log_w: tf.Tensor, loc: tf.Tensor, scale_tril: tf.
         validate_args=False,
     ).sample(n_samples)
 
-    # TODO: write this without using tfp.distributions?
-    # non-batched code
+    # # TODO: write this without using tfp.distributions?
+    # # non-batched code
     # sampled_components = sample_categorical(n_samples=n_samples, log_w=log_w)
     # samples = tf.zeros((n_samples,) + batch_shape + (d_z,))
     # for i in range(n_components):
@@ -268,8 +269,8 @@ def gmm_log_density_grad_hess(
     loc: tf.Tensor,
     prec: tf.Tensor,  # TODO: unify usage of prec, cov, scale_tril
     scale_tril: tf.Tensor,  # TODO: unify usage of prec, cov, scale_tril
-    compute_gradient: bool,
-    compute_hessian: bool,
+    compute_grad: bool,
+    compute_hess: bool,
 ):
     # check input
     n_samples = z.shape[0]
@@ -280,7 +281,7 @@ def gmm_log_density_grad_hess(
     assert log_w.shape == batch_shape + (n_components,)
     assert loc.shape == batch_shape + (n_components, d_z)
     assert prec.shape == batch_shape + (n_components, d_z, d_z)
-    assert not (compute_hessian and not compute_gradient)
+    assert not (compute_hess and not compute_grad)
 
     # compute log_density, and log_responsibilities
     log_density, log_component_densities = _gmm_log_density_and_log_component_densities(
@@ -288,7 +289,7 @@ def gmm_log_density_grad_hess(
     )
 
     # compute gradient
-    if compute_gradient:
+    if compute_grad:
         log_density_grad, log_responsibilities, prec_times_diff = _gmm_log_density_grad(
             z=z,
             log_w=log_w,
@@ -301,7 +302,7 @@ def gmm_log_density_grad_hess(
         log_density_grad = None
 
     # compute Hessian
-    if compute_hessian:
+    if compute_hess:
         log_density_hess = _gmm_log_density_hess(
             prec=prec,
             log_responsibilities=log_responsibilities,
@@ -313,9 +314,9 @@ def gmm_log_density_grad_hess(
 
     # check output
     assert log_density.shape == (n_samples,) + batch_shape
-    if compute_gradient:
+    if compute_grad:
         assert log_density_grad.shape == (n_samples,) + batch_shape + (d_z,)
-    if compute_hessian:
+    if compute_hess:
         assert log_density_hess.shape == (n_samples,) + batch_shape + (d_z, d_z)
     return log_density, log_density_grad, log_density_hess
 
@@ -716,11 +717,26 @@ class GMM:
     @tf.function
     def log_density(self, z: tf.Tensor):
         return gmm_log_density(
-            z=z, log_w=self.log_w, loc=self.loc, scale_tril=self.scale_tril
+            z=z,
+            log_w=self.log_w,
+            log_component_densities=self.log_component_densities(z=z),
         )
 
     @tf.function
     def log_component_densities(self, z: tf.Tensor):
         return gmm_log_component_densities(
             z=z, loc=self.loc, scale_tril=self.scale_tril
+        )
+
+    def eval_density_grad_hess(
+        self, z: tf.Tensor, compute_grad: bool, compute_hess: bool
+    ):
+        return gmm_log_density_grad_hess(
+            z=z,
+            log_w=self.log_w,
+            loc=self.loc,
+            prec=self.prec,
+            scale_tril=self.scale_tril,
+            compute_grad=compute_grad,
+            compute_hess=compute_hess,
         )

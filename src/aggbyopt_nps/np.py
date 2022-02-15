@@ -215,6 +215,7 @@ class PosteriorLearner:
             lr_w=self.lr_w,
             lr_mu_prec=self.lr_mu_prec,
             prec_method="hessian",
+            use_autograd_for_model=False,
         )
 
 
@@ -292,6 +293,10 @@ def create_initial_gmm_parameters(
     assert weights.shape == (n_tasks, n_components)
     assert means.shape == (n_tasks, n_components, d_z)
     assert covs.shape == (n_tasks, n_components, d_z, d_z)
+    if n_tasks == 1:  # for backwards compatibility
+        weights = tf.squeeze(weights, 0)
+        means = tf.squeeze(means, 0)
+        covs = tf.squeeze(covs, 0)
     return weights, means, covs
 
 

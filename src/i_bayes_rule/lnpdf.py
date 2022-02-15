@@ -4,7 +4,12 @@ import numpy as np
 import tensorflow as tf
 import tensorflow_probability as tfp
 
-from i_bayes_rule.util import sample_gmm, gmm_log_responsibilities, cov_to_scale_tril
+from i_bayes_rule.util import (
+    sample_gmm,
+    gmm_log_density,
+    cov_to_scale_tril,
+    gmm_log_component_densities,
+)
 
 # Source: Oleg
 
@@ -54,11 +59,12 @@ class GMM_LNPDF(LNPDF):
 
     @tf.function
     def log_density(self, x):
-        return gmm_log_responsibilities(
+        return gmm_log_density(
             z=x,
             log_w=self.log_w,
-            loc=self.mu,
-            scale_tril=cov_to_scale_tril(self.cov),
+            log_component_densities=gmm_log_component_densities(
+                z=x, loc=self.mu, scale_tril=cov_to_scale_tril(self.cov)
+            ),
         )
 
 

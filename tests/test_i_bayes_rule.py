@@ -1000,8 +1000,8 @@ def test_gmm_log_density_grad_hess():
         loc=loc,
         prec=tf.linalg.inv(scale_tril_to_cov(scale_tril)),
         scale_tril=scale_tril,
-        compute_gradient=True,
-        compute_hessian=True,
+        compute_grad=True,
+        compute_hess=True,
     )
     gmm = tfp.distributions.MixtureSameFamily(
         mixture_distribution=tfp.distributions.Categorical(
@@ -1054,8 +1054,8 @@ def test_gmm_log_density_grad_hess():
         loc=loc,
         prec=tf.linalg.inv(scale_tril_to_cov(scale_tril)),
         scale_tril=scale_tril,
-        compute_gradient=True,
-        compute_hessian=True,
+        compute_grad=True,
+        compute_hess=True,
     )
     gmm = tfp.distributions.MixtureSameFamily(
         mixture_distribution=tfp.distributions.Categorical(
@@ -1099,8 +1099,8 @@ def test_gmm_log_density_grad_hess():
         loc=loc,
         prec=tf.linalg.inv(scale_tril_to_cov(scale_tril)),
         scale_tril=scale_tril,
-        compute_gradient=True,
-        compute_hessian=True,
+        compute_grad=True,
+        compute_hess=True,
     )
     gmm = tfp.distributions.MixtureSameFamily(
         mixture_distribution=tfp.distributions.Categorical(
@@ -1155,8 +1155,8 @@ def test_gmm_log_density_grad_hess():
         loc=loc,
         prec=tf.linalg.inv(scale_tril_to_cov(scale_tril)),
         scale_tril=scale_tril,
-        compute_gradient=True,
-        compute_hessian=True,
+        compute_grad=True,
+        compute_hess=True,
     )
     gmm = tfp.distributions.MixtureSameFamily(
         mixture_distribution=tfp.distributions.Categorical(
@@ -1237,8 +1237,8 @@ def test_gmm_log_density_grad_hess():
         loc=loc,
         prec=tf.linalg.inv(scale_tril_to_cov(scale_tril)),
         scale_tril=scale_tril,
-        compute_gradient=True,
-        compute_hessian=True,
+        compute_grad=True,
+        compute_hess=True,
     )
     gmm = tfp.distributions.MixtureSameFamily(
         mixture_distribution=tfp.distributions.Categorical(
