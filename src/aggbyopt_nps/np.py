@@ -279,7 +279,7 @@ class PosteriorLearner:
             n_samples=self.n_samples,
             lr_w=self.lr_w,
             lr_mu_prec=self.lr_mu_prec,
-            prec_method="hessian",
+            prec_method="reparam",
             use_autograd_for_model=False,
         )
 
@@ -352,8 +352,9 @@ class DecoderLearner:
                 self.model._log_unnormalized_posterior_density(x=x, y=y, z=z_post)
             )
             if (
-                x_ctx[1].shape != 0
-            ):  # TODO: check that this is handled correctly in graph mode
+                x_ctx.shape[1] != 0
+            ):  
+                # TODO: check that this is handled correctly in graph mode
                 # compute log marginal likelihood of context set
                 #  we drop the log 1/S term as it is constant in theta
                 log_marg_lhd = self.model._log_unnormalized_posterior_density(
@@ -480,11 +481,14 @@ def meta_train_np(
 
     ## train model
     np_model.reset_gmm(n_tasks=n_tasks)
+    metrics = None
     for i in tqdm(range(n_iter)):
-        metrics = decoder_learner.step(x=x, y=y)
-        posterior_learner.step(x=x, y=y)
         if callback is not None:
             callback(iteration=i, np_model=np_model, metrics=metrics)
+        metrics = decoder_learner.step(x=x, y=y)
+        posterior_learner.step(x=x, y=y)
+    if callback is not None:
+        callback(iteration=n_iter, np_model=np_model, metrics=metrics)
 
     return np_model
 
@@ -520,8 +524,10 @@ def adapt_np(
     # train model
     np_model.reset_gmm(n_tasks=n_tasks)
     for i in tqdm(range(n_iter)):
-        posterior_learner.step(x=x, y=y)
         if callback is not None:
             callback(iteration=i, np_model=np_model, metrics=None)
+        posterior_learner.step(x=x, y=y)
+    if callback is not None:
+        callback(iteration=n_iter, np_model=np_model, metrics=None)
 
     return np_model

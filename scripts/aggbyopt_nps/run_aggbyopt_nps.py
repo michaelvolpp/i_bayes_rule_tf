@@ -39,7 +39,7 @@ def callback_fn(
     log_dict = {"iter": iteration}
     if metrics is not None:
         log_dict.update({f"{wandb_tag}_{k}": v for k, v in metrics.items()})
-    if iteration % config["plot_interval"] == 0:
+    if iteration % config["plot_interval"] == 0 or iteration == config["n_iter"] - 1:
         fig = plot(
             np_model=np_model,
             n_task_max=config["n_task_plot"],
@@ -260,6 +260,8 @@ def run_experiment(config, wandb_run):
         y_pred=y_pred, sigma_pred=np.sqrt(var_pred), y_true=y_test
     )
     # log metrics
+    wandb_run.summary["test_mse"] = mse
+    wandb_run.summary["test_lmlhd"] = lmlhd
     print(f"MSE   = {mse:.4f}")
     print(f"LMLHD = {lmlhd:.4f}")
 
@@ -272,7 +274,7 @@ def main():
     # tf.config.run_functions_eagerly(True)  # only for debugging
     ## wandb
     wandb_mode = os.getenv("WANDB_MODE", "online")
-    smoke_test = os.getenv("SMOKE_TEST", "True") == "False"
+    smoke_test = os.getenv("SMOKE_TEST", "False") == "True"
     print(f"wandb_mode={wandb_mode}")
     print(f"smoke_test={smoke_test}")
 
@@ -288,13 +290,13 @@ def main():
     config["data_noise_std"] = 0.5
     # meta data
     config["n_task_meta"] = 16
-    config["n_datapoints_per_task_meta"] = 16
+    config["n_datapoints_per_task_meta"] = 2
     config["seed_task_meta"] = 1234
     config["seed_x_meta"] = 2234
     config["seed_noise_meta"] = 3234
     # test data
-    config["n_task_test"] = 16 if smoke_test else 128
-    config["n_datapoints_per_task_test"] = 2
+    config["n_task_test"] = 16 if smoke_test else 64
+    config["n_datapoints_per_task_test"] = 16
     config["seed_task_test"] = 1235
     config["seed_x_test"] = 2235
     config["seed_noise_test"] = 3235
@@ -307,7 +309,7 @@ def main():
     config["decoder_d_hidden"] = 16
     config["decoder_output_scale"] = config["data_noise_std"]
     # training
-    config["n_iter"] = 100 if smoke_test else 10000
+    config["n_iter"] = 100 if smoke_test else 1000
     config["gmm_learner_lr_mu_prec"] = 0.01
     config["gmm_learner_lr_w"] = 0.05 * config["gmm_learner_lr_mu_prec"]
     config["gmm_learner_n_samples"] = 16
@@ -321,7 +323,7 @@ def main():
     # testing
     config["n_samples_test"] = 1024
     # plotting/logging
-    config["plot_interval"] = config["n_iter"] // 5
+    config["plot_interval"] = config["n_iter"] // 1 if smoke_test else config["n_iter"] // 5
     config["n_task_plot"] = 5
 
     ## run
