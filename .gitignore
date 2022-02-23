@@ -155,3 +155,5 @@ log/
 .DS_Store
 .vscode
 *.code-workspace
+wandb/
+misc/
