@@ -286,16 +286,16 @@ def main():
     # seed
     config["seed"] = 1234
     # benchmark
-    config["benchmark"] = "Affine1D"
+    config["benchmark"] = "Quadratic1D"
     config["data_noise_std"] = 0.5
     # meta data
-    config["n_task_meta"] = 16
-    config["n_datapoints_per_task_meta"] = 2
+    config["n_task_meta"] = 64
+    config["n_datapoints_per_task_meta"] = 16
     config["seed_task_meta"] = 1234
     config["seed_x_meta"] = 2234
     config["seed_noise_meta"] = 3234
     # test data
-    config["n_task_test"] = 16 if smoke_test else 64
+    config["n_task_test"] = 64
     config["n_datapoints_per_task_test"] = 16
     config["seed_task_test"] = 1235
     config["seed_x_test"] = 2235
@@ -309,7 +309,7 @@ def main():
     config["decoder_d_hidden"] = 16
     config["decoder_output_scale"] = config["data_noise_std"]
     # training
-    config["n_iter"] = 100 if smoke_test else 1000
+    config["n_iter"] = 100 if smoke_test else 5000
     config["gmm_learner_lr_mu_prec"] = 0.01
     config["gmm_learner_lr_w"] = 0.05 * config["gmm_learner_lr_mu_prec"]
     config["gmm_learner_n_samples"] = 16
