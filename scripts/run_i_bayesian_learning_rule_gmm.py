@@ -144,19 +144,20 @@ def main():
     tf.random.set_seed(config["seed"])
 
     ## set number of tasks
-    n_tasks = 3
+    # learn n_tasks GMMs in parallel along a batch dimension if target dist allows this
+    n_tasks = 1
 
     ## Create target dist (GMM): choose one of the following target distributions
     # (i) Simple toy target
-    config["savepath"] = os.path.join(scriptpath, "log", "toy_gmm")
-    config["n_components_model"] = 3
-    config["n_dimensions_model"] = 2
-    target_dist = make_simple_target(n_tasks=n_tasks)
-    # (ii) Star-GMM from Lin et al.
-    # config["savepath"] = os.path.join(scriptpath, "log", "star_gmm")
-    # config["n_components_model"] = 10
+    # config["savepath"] = os.path.join(scriptpath, "log", "toy_gmm")
+    # config["n_components_model"] = 3
     # config["n_dimensions_model"] = 2
-    # target_dist = make_star_target(num_components=5)
+    # target_dist = make_simple_target(n_tasks=n_tasks)
+    # (ii) Star-GMM from Lin et al.
+    config["savepath"] = os.path.join(scriptpath, "log", "star_gmm")
+    config["n_components_model"] = 10
+    config["n_dimensions_model"] = 2
+    target_dist = make_star_target(num_components=5)
     # (iii) Random GMM
     # config["savepath"] = os.path.join(scriptpath, "log", "random_gmm")
     # n_dimensions = 200

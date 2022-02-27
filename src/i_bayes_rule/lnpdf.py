@@ -11,8 +11,6 @@ from i_bayes_rule.util import (
     gmm_log_component_densities,
 )
 
-# Source: Oleg
-
 
 class LNPDF:
     def log_density(self, x):

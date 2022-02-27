@@ -8,6 +8,8 @@ This is a Tensorflow 2.0 implementation of the Improved Bayesian Learning Rule f
 ![](./plots/lin_et_al.png)
 Plots taken from [the original paper](https://arxiv.org/abs/2002.10060).
 
+![](./plots/star.png)
+
 ## Getting Started
 Clone this repository and run
 ```

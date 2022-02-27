@@ -16,7 +16,6 @@ from i_bayes_rule.util import (
     scale_tril_to_cov,
 )
 
-# TODO: do we need Hessian of model? cf. Oleg -> for a Gaussian, Hessian can be computed analytically!
 
 
 def i_bayesian_learning_rule_gmm(
