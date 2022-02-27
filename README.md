@@ -5,9 +5,6 @@ This is a Tensorflow 2.0 implementation of the Improved Bayesian Learning Rule f
 - [Paper by Lin et al.](https://arxiv.org/abs/2002.10060)
 - [Matlab code by original authors](https://github.com/yorkerlin/iBayesLRule)
 
-![](./plots/lin_et_al.png)
-Plots taken from [the original paper](https://arxiv.org/abs/2002.10060).
-
 ![](./plots/star.png)
 
 ## Getting Started
