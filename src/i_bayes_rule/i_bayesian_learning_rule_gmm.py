@@ -9,13 +9,11 @@ from i_bayes_rule.lnpdf import LNPDF
 from i_bayes_rule.util import (
     GMM,
     compute_S_bar,
-    eval_fn_grad_hess,
     expectation_prod_neg,
     log_omega_to_log_w,
     log_w_to_log_omega,
     scale_tril_to_cov,
 )
-
 
 
 def i_bayesian_learning_rule_gmm(
@@ -53,13 +51,12 @@ def i_bayesian_learning_rule_gmm(
         for i in range(config["n_iter"]):
             # update parameters
             model, n_fevals = step(
-                target_density_fn=target_dist.log_density,
+                target_dist=target_dist,
                 model=model,
                 n_samples=config["n_samples_per_iter"],
                 lr_w=config["lr_w"],
                 lr_mu_prec=config["lr_mu_prec"],
                 prec_method=config["prec_update_method"],
-                use_autograd_for_model=config["use_autograd_for_model"],
             )
             # update n_fevals_total
             # TODO: what does n_fevals actually count
@@ -95,9 +92,9 @@ def log_results(
 ):
     # draw test samples and compute target log likelihood
     z = model.sample(2000)
-    model_ll = model.log_density(z=z)
+    model_ll, _, _ = model.log_density(z=z)
     model_ll = tf.reduce_mean(model_ll)
-    tgt_ll = target_dist.log_density(x=z)
+    tgt_ll, _, _ = target_dist.log_density(z=z)
     tgt_ll = tf.reduce_mean(tgt_ll)
     elbo = tgt_ll - model_ll
 
@@ -131,12 +128,11 @@ def log_results(
 
 def step(
     model,
-    target_density_fn,
+    target_dist,
     n_samples,
     lr_w,
     lr_mu_prec,
     prec_method,
-    use_autograd_for_model,
 ):
     # check input
     n_components = model.log_w.shape[-1]
@@ -154,9 +150,7 @@ def step(
         log_tgt_density,
         log_tgt_density_grad,
         log_tgt_density_hess,  # we only require this for the hessian method
-    ) = eval_fn_grad_hess(
-        fn=target_density_fn, z=z, compute_grad=True, compute_hess=compute_hess
-    )
+    ) = target_dist.log_density(z=z, compute_grad=True, compute_hess=compute_hess)
     assert log_tgt_density.shape == (n_samples,) + batch_shape
     assert log_tgt_density_grad.shape == (n_samples,) + batch_shape + (d_z,)
     if compute_hess:
@@ -164,20 +158,11 @@ def step(
     n_feval = np.product(z.shape[:-1])  # TODO: is this correct?
 
     ## evaluate the GMM model, and its gradient + hessian at samples
-    if use_autograd_for_model:
-        (
-            log_model_density,
-            log_model_density_grad,
-            log_model_density_hess,
-        ) = eval_fn_grad_hess(
-            fn=model.log_density, z=z, compute_grad=True, compute_hess=True
-        )
-    else:
-        (
-            log_model_density,
-            log_model_density_grad,
-            log_model_density_hess,
-        ) = model.eval_density_grad_hess(z=z, compute_grad=True, compute_hess=True)
+    (
+        log_model_density,
+        log_model_density_grad,
+        log_model_density_hess,
+    ) = model.log_density(z=z, compute_grad=True, compute_hess=True)
     assert log_model_density.shape == (n_samples,) + batch_shape
     assert log_model_density_grad.shape == (n_samples,) + batch_shape + (d_z,)
     assert log_model_density_hess.shape == (n_samples,) + batch_shape + (d_z, d_z)
@@ -239,7 +224,15 @@ def step(
     return model, n_feval
 
 
-@tf.function
+@tf.function(
+    input_signature=[
+        tf.TensorSpec(shape=[None, None], dtype=tf.float32),
+        tf.TensorSpec(shape=[None, None, None], dtype=tf.float32),
+        tf.TensorSpec(shape=[None, None], dtype=tf.float32),
+        tf.TensorSpec(shape=[None, None], dtype=tf.float32),
+        tf.TensorSpec(shape=None, dtype=tf.float32),
+    ]
+)
 def update_log_w(
     log_w: tf.Tensor,
     log_delta_z: tf.Tensor,
@@ -248,13 +241,14 @@ def update_log_w(
     lr: float,
 ):
     # check inputs
-    batch_shape = log_w.shape[:-1]
-    n_components = log_w.shape[-1]
-    n_samples = log_target_density.shape[0]
-    assert log_w.shape == batch_shape + (n_components,)
-    assert log_delta_z.shape == (n_samples,) + batch_shape + (n_components,)
-    assert log_target_density.shape == (n_samples,) + batch_shape
-    assert log_model_density.shape == (n_samples,) + batch_shape
+    if tf.executing_eagerly():
+        batch_shape = log_w.shape[:-1]
+        n_components = log_w.shape[-1]
+        n_samples = log_target_density.shape[0]
+        assert log_w.shape == batch_shape + (n_components,)
+        assert log_delta_z.shape == (n_samples,) + batch_shape + (n_components,)
+        assert log_target_density.shape == (n_samples,) + batch_shape
+        assert log_model_density.shape == (n_samples,) + batch_shape
 
     # computations are performed in log_omega space
     #  where omega[k] := w[k] / w[K] for k=1..K-1
@@ -262,10 +256,10 @@ def update_log_w(
 
     ## update log_omega
     b_z = -log_target_density + log_model_density
-    assert b_z.shape == (n_samples,) + batch_shape
+    # assert b_z.shape == (n_samples,) + batch_shape
     # compute E_q[delta(z) * b(z)]
     expectation = expectation_prod_neg(log_a_z=log_delta_z, b_z=b_z[..., None])
-    assert expectation.shape == batch_shape + (n_components,)
+    # assert expectation.shape == batch_shape + (n_components,)
     # compute E_q[(delta(z)[:-1] - delta(z)[-1])*b(z)]
     d_log_omega = expectation[..., :-1] - expectation[..., -1:]
     # update log_omega
@@ -276,11 +270,21 @@ def update_log_w(
     log_w = log_omega_to_log_w(log_omega)
 
     # check outputs
-    assert log_w.shape == batch_shape + (n_components,)
+    if tf.executing_eagerly():
+        assert log_w.shape == batch_shape + (n_components,)
     return log_w
 
 
-@tf.function
+@tf.function(
+    input_signature=[
+        tf.TensorSpec(shape=[None, None, None], dtype=tf.float32),
+        tf.TensorSpec(shape=[None, None, None, None], dtype=tf.float32),
+        tf.TensorSpec(shape=[None, None, None], dtype=tf.float32),
+        tf.TensorSpec(shape=[None, None, None], dtype=tf.float32),
+        tf.TensorSpec(shape=[None, None, None], dtype=tf.float32),
+        tf.TensorSpec(shape=None, dtype=tf.float32),
+    ]
+)
 def update_mu(
     mu: tf.Tensor,
     prec_tril: tf.Tensor,
@@ -290,67 +294,86 @@ def update_mu(
     lr: float,
 ):
     # check inputs
-    batch_shape = mu.shape[:-2]
-    n_components = mu.shape[-2]
-    d_z = mu.shape[-1]
-    n_samples = log_target_density_grad.shape[0]
-    assert mu.shape == batch_shape + (n_components, d_z)
-    assert prec_tril.shape == batch_shape + (n_components, d_z, d_z)
-    assert log_delta_z.shape == (n_samples,) + batch_shape + (n_components,)
-    assert log_target_density_grad.shape == (n_samples,) + batch_shape + (d_z,)
-    assert log_model_density_grad.shape == (n_samples,) + batch_shape + (d_z,)
+    if tf.executing_eagerly():
+        batch_shape = mu.shape[:-2]
+        n_components = mu.shape[-2]
+        d_z = mu.shape[-1]
+        n_samples = log_target_density_grad.shape[0]
+        assert mu.shape == batch_shape + (n_components, d_z)
+        assert prec_tril.shape == batch_shape + (n_components, d_z, d_z)
+        assert log_delta_z.shape == (n_samples,) + batch_shape + (n_components,)
+        assert log_target_density_grad.shape == (n_samples,) + batch_shape + (d_z,)
+        assert log_model_density_grad.shape == (n_samples,) + batch_shape + (d_z,)
 
     ## update mu
     b_z_grad = -log_target_density_grad + log_model_density_grad
-    assert b_z_grad.shape == (n_samples,) + batch_shape + (d_z,)
+    # assert b_z_grad.shape == (n_samples,) + batch_shape + (d_z,)
     # compute E_q[delta(z) * d/dz(b(z))]
     expectation = expectation_prod_neg(
         log_a_z=log_delta_z[..., None], b_z=b_z_grad[..., None, :]
     )
-    assert expectation.shape == batch_shape + (n_components, d_z)
+    # assert expectation.shape == batch_shape + (n_components, d_z)
     # compute S^{-1} * E_q[delta(z)*grad_z(b(z))]
     d_mu = tf.linalg.cholesky_solve(
         chol=prec_tril,
         rhs=expectation[..., None],
     )[..., 0]
-    assert d_mu.shape == batch_shape + (n_components, d_z)
+    # assert d_mu.shape == batch_shape + (n_components, d_z)
     # update mu
     d_mu = -lr * d_mu
     mu = mu + d_mu
 
     # check outputs
-    assert mu.shape == batch_shape + (n_components, d_z)
+    if tf.executing_eagerly():
+        assert mu.shape == batch_shape + (n_components, d_z)
     return mu
 
 
-@tf.function
+@tf.function(
+    input_signature=[
+        tf.TensorSpec(shape=[None, None, None], dtype=tf.float32),
+        tf.TensorSpec(shape=[None, None, None, None], dtype=tf.float32),
+        tf.TensorSpec(shape=[None, None, None, None], dtype=tf.float32),
+    ]
+)
 def compute_g_hessian(
     log_delta_z: tf.Tensor,
     log_target_density_hess: tf.Tensor,
     log_model_density_hess: tf.Tensor,
 ):
     # check inputs
-    n_samples = log_delta_z.shape[0]
-    n_components = log_delta_z.shape[-1]
-    batch_shape = log_delta_z.shape[1:-1]
-    d_z = log_target_density_hess.shape[-1]
-    assert log_delta_z.shape == (n_samples,) + batch_shape + (n_components,)
-    assert log_target_density_hess.shape == (n_samples,) + batch_shape + (d_z, d_z)
-    assert log_model_density_hess.shape == (n_samples,) + batch_shape + (d_z, d_z)
+    if tf.executing_eagerly():
+        n_samples = log_delta_z.shape[0]
+        n_components = log_delta_z.shape[-1]
+        batch_shape = log_delta_z.shape[1:-1]
+        d_z = log_target_density_hess.shape[-1]
+        assert log_delta_z.shape == (n_samples,) + batch_shape + (n_components,)
+        assert log_target_density_hess.shape == (n_samples,) + batch_shape + (d_z, d_z)
+        assert log_model_density_hess.shape == (n_samples,) + batch_shape + (d_z, d_z)
 
     # compute g = -E_q[delta(z) * d^2/dz^2 b(z)]
     b_z_hess = -log_target_density_hess + log_model_density_hess
-    assert b_z_hess.shape == (n_samples,) + batch_shape + (d_z, d_z)
+    # assert b_z_hess.shape == (n_samples,) + batch_shape + (d_z, d_z)
     g = -expectation_prod_neg(
         log_a_z=log_delta_z[..., None, None], b_z=b_z_hess[..., None, :, :]
     )
 
     # check output
-    assert g.shape == batch_shape + (n_components, d_z, d_z)
+    if tf.executing_eagerly():
+        assert g.shape == batch_shape + (n_components, d_z, d_z)
     return g
 
 
-@tf.function
+@tf.function(
+    input_signature=[
+        tf.TensorSpec(shape=[None, None, None], dtype=tf.float32),
+        tf.TensorSpec(shape=[None, None, None], dtype=tf.float32),
+        tf.TensorSpec(shape=[None, None, None, None], dtype=tf.float32),
+        tf.TensorSpec(shape=[None, None, None], dtype=tf.float32),
+        tf.TensorSpec(shape=[None, None, None], dtype=tf.float32),
+        tf.TensorSpec(shape=[None, None, None, None], dtype=tf.float32),
+    ]
+)
 def compute_g_reparam(
     z: tf.Tensor,
     mu: tf.Tensor,
@@ -360,35 +383,44 @@ def compute_g_reparam(
     log_model_density_hess: tf.Tensor,
 ):
     # check inputs
-    n_samples = log_delta_z.shape[0]
-    n_components = log_delta_z.shape[-1]
-    batch_shape = log_delta_z.shape[1:-1]
-    d_z = log_target_density_grad.shape[-1]
-    assert z.shape == (n_samples,) + batch_shape + (d_z,)
-    assert mu.shape == batch_shape + (n_components, d_z)
-    assert prec.shape == batch_shape + (n_components, d_z, d_z)
-    assert log_delta_z.shape == (n_samples,) + batch_shape + (n_components,)
-    assert log_target_density_grad.shape == (n_samples,) + batch_shape + (d_z,)
-    assert log_model_density_hess.shape == (n_samples,) + batch_shape + (d_z, d_z)
+    if tf.executing_eagerly():
+        n_samples = log_delta_z.shape[0]
+        n_components = log_delta_z.shape[-1]
+        batch_shape = log_delta_z.shape[1:-1]
+        d_z = log_target_density_grad.shape[-1]
+        assert z.shape == (n_samples,) + batch_shape + (d_z,)
+        assert mu.shape == batch_shape + (n_components, d_z)
+        assert prec.shape == batch_shape + (n_components, d_z, d_z)
+        assert log_delta_z.shape == (n_samples,) + batch_shape + (n_components,)
+        assert log_target_density_grad.shape == (n_samples,) + batch_shape + (d_z,)
+        assert log_model_density_hess.shape == (n_samples,) + batch_shape + (d_z, d_z)
 
     ## compute g = -E_q[delta(z) * ((S_bar + S_bar^T)/2 + d^2/dz^2 log(q(z))]
     S_bar = compute_S_bar(
-        prec=prec, z=z, mu=mu, log_tgt_post_grad=log_target_density_grad
+        prec=prec, z=z, loc=mu, log_tgt_post_grad=log_target_density_grad
     )
     # symmetrize
     S_bar_sym = 0.5 * (S_bar + tf.linalg.matrix_transpose(S_bar))
-    assert S_bar_sym.shape == (n_samples,) + batch_shape + (n_components, d_z, d_z)
+    # assert S_bar_sym.shape == (n_samples,) + batch_shape + (n_components, d_z, d_z)
     # compute g
     b_z_reparam = S_bar_sym + log_model_density_hess[..., None, :, :]
-    assert b_z_reparam.shape == (n_samples,) + batch_shape + (n_components, d_z, d_z)
+    # assert b_z_reparam.shape == (n_samples,) + batch_shape + (n_components, d_z, d_z)
     g = -expectation_prod_neg(log_a_z=log_delta_z[..., None, None], b_z=b_z_reparam)
 
     # check output
-    assert g.shape == batch_shape + (n_components, d_z, d_z)
+    if tf.executing_eagerly():
+        assert g.shape == batch_shape + (n_components, d_z, d_z)
     return g
 
 
-@tf.function
+@tf.function(
+    input_signature=[
+        tf.TensorSpec(shape=[None, None, None, None], dtype=tf.float32),
+        tf.TensorSpec(shape=[None, None, None, None], dtype=tf.float32),
+        tf.TensorSpec(shape=[None, None, None, None], dtype=tf.float32),
+        tf.TensorSpec(shape=None, dtype=tf.float32),
+    ]
+)
 def update_prec(
     prec: tf.Tensor,
     prec_tril: tf.Tensor,
@@ -396,21 +428,22 @@ def update_prec(
     lr: float,
 ):
     # check input
-    batch_shape = prec.shape[:-3]
-    n_components = prec.shape[-3]
-    d_z = prec.shape[-1]
-    assert prec.shape == batch_shape + (n_components, d_z, d_z)
-    assert prec_tril.shape == batch_shape + (n_components, d_z, d_z)
-    assert g.shape == batch_shape + (n_components, d_z, d_z)
+    if tf.executing_eagerly():
+        batch_shape = prec.shape[:-3]
+        n_components = prec.shape[-3]
+        d_z = prec.shape[-1]
+        assert prec.shape == batch_shape + (n_components, d_z, d_z)
+        assert prec_tril.shape == batch_shape + (n_components, d_z, d_z)
+        assert g.shape == batch_shape + (n_components, d_z, d_z)
 
     ## update precision
     # solve linear equations
     sols = tf.linalg.cholesky_solve(chol=prec_tril, rhs=g)
-    assert sols.shape == batch_shape + (n_components, d_z, d_z)
+    # assert sols.shape == batch_shape + (n_components, d_z, d_z)
     # compute update
     d_prec = -lr * g
-    d_prec = d_prec + 0.5 * lr ** 2 * tf.einsum("...kij,...kjl->...kil", g, sols)
-    assert d_prec.shape == batch_shape + (n_components, d_z, d_z)
+    d_prec = d_prec + 0.5 * lr**2 * tf.einsum("...kij,...kjl->...kil", g, sols)
+    # assert d_prec.shape == batch_shape + (n_components, d_z, d_z)
     prec = prec + d_prec
 
     # TODO: the following might be more stable?
@@ -421,5 +454,6 @@ def update_prec(
     # prec = 0.5 * (prec + tf.transpose(prec, [0, 2, 1]))
 
     # check output
-    assert prec.shape == batch_shape + (n_components, d_z, d_z)
+    if tf.executing_eagerly():
+        assert prec.shape == batch_shape + (n_components, d_z, d_z)
     return prec

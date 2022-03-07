@@ -2,21 +2,17 @@ import math
 
 import numpy as np
 import tensorflow as tf
-import tensorflow_probability as tfp
 
-from i_bayes_rule.util import (
-    sample_gmm,
-    gmm_log_density,
-    cov_to_scale_tril,
-    gmm_log_component_densities,
-)
+from i_bayes_rule.util import cov_to_scale_tril, gmm_log_density_grad_hess, sample_gmm
 
 
 class LNPDF:
-    def log_density(self, x):
-        raise NotImplementedError
-
-    def gradient_log_density(self, x):
+    def log_density(
+        self,
+        z: tf.Tensor,
+        compute_grad: bool = False,
+        compute_hess: bool = False,
+    ):
         raise NotImplementedError
 
     def get_num_dimensions(self):
@@ -25,7 +21,7 @@ class LNPDF:
     def can_sample(self):
         return False
 
-    def sample(self, n):
+    def sample(self, n: int):
         raise NotImplementedError
 
 
@@ -40,48 +36,38 @@ class GMM_LNPDF(LNPDF):
         self.mu = tf.constant(target_means.astype(np.float32))
         self.cov = tf.constant(target_covars.astype(np.float32))
 
+    def log_density(
+        self,
+        z: tf.Tensor,
+        compute_grad: bool = False,
+        compute_hess: bool = False,
+    ):
+        return gmm_log_density_grad_hess(
+            z=z,
+            log_w=self.log_w,
+            loc=self.mu,
+            prec=tf.linalg.inv(self.cov),  # TODO: unify prec, scale_tril, cov
+            scale_tril=cov_to_scale_tril(self.cov),  # TODO: unify prec, scale_tril, cov
+            compute_grad=compute_grad,
+            compute_hess=compute_hess,
+        )
+
     def get_num_dimensions(self):
         return self.mu.shape[-1]
 
     def can_sample(self):
         return True
 
-    @tf.function
-    def sample(self, n):
+    def sample(self, n: int):
         return sample_gmm(
-            n_samples=n,
+            n_samples=tf.constant(n),
             log_w=self.log_w,
             loc=self.mu,
             scale_tril=cov_to_scale_tril(self.cov),
         )
 
-    @tf.function
-    def log_density(self, x):
-        return gmm_log_density(
-            z=x,
-            log_w=self.log_w,
-            log_component_densities=gmm_log_component_densities(
-                z=x, loc=self.mu, scale_tril=cov_to_scale_tril(self.cov)
-            ),
-        )
 
-
-def make_target(num_dimensions):
-    num_true_components = 10
-    weights = np.ones(num_true_components) / num_true_components
-    means = np.empty((num_true_components, num_dimensions))
-    covs = np.empty((num_true_components, num_dimensions, num_dimensions))
-    for i in range(0, num_true_components):
-        means[i] = 100 * (np.random.random(num_dimensions) - 0.5)
-        covs[i] = 0.1 * np.random.normal(
-            0, num_dimensions, (num_dimensions * num_dimensions)
-        ).reshape((num_dimensions, num_dimensions))
-        covs[i] = covs[i].transpose().dot(covs[i])
-        covs[i] += 1 * np.eye(num_dimensions)
-    return GMM_LNPDF(weights, means, covs)
-
-
-def U(theta):
+def U(theta: float):
     return np.array(
         [
             [math.cos(theta), math.sin(theta)],
@@ -90,7 +76,7 @@ def U(theta):
     )
 
 
-def make_simple_target(n_tasks):
+def make_simple_target(n_tasks: int):
     pi = math.pi
 
     # weights
@@ -129,27 +115,36 @@ def make_simple_target(n_tasks):
     return target_dist
 
 
-def make_star_target(num_components):
+def make_star_target(n_tasks: int, n_components: int):
     # Source: Lin et al.
-    K = num_components
 
     ## weights
-    w_true = np.ones((K,)) / K
+    w_true = np.ones((n_components,)) / n_components
 
     ## means and precs
     # first component
     mus = [np.array([1.5, 0.0])]
     precs = [np.diag([1.0, 100.0])]
     # other components are generated through rotation
-    theta = 2 * math.pi / K
-    for _ in range(K - 1):
+    theta = 2 * math.pi / n_components
+    for _ in range(n_components - 1):
         mus.append(U(theta) @ mus[-1])
         precs.append(U(theta) @ precs[-1] @ np.transpose(U(theta)))
-    assert len(w_true) == len(mus) == len(precs) == K
+    assert len(w_true) == len(mus) == len(precs) == n_components
 
     mu_true = np.stack(mus, axis=0)
     prec_true = np.stack(precs, axis=0)
     cov_true = np.linalg.inv(prec_true)
+
+    # repeat parameters n_tasks times
+    w_true = np.repeat(w_true[None, ...], repeats=n_tasks, axis=0)
+    mu_true = np.repeat(mu_true[None, ...], repeats=n_tasks, axis=0)
+    cov_true = np.repeat(cov_true[None, ...], repeats=n_tasks, axis=0)
+
+    # check shapes
+    assert w_true.shape == (n_tasks, n_components)
+    assert mu_true.shape == (n_tasks, n_components, 2)
+    assert cov_true.shape == (n_tasks, n_components, 2, 2)
 
     # generate target dist
     target_dist = GMM_LNPDF(

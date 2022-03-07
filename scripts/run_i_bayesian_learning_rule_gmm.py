@@ -5,7 +5,7 @@ import numpy as np
 import tensorflow as tf
 import tensorflow_probability as tfp
 from i_bayes_rule.i_bayesian_learning_rule_gmm import i_bayesian_learning_rule_gmm
-from i_bayes_rule.lnpdf import make_simple_target, make_star_target, make_target
+from i_bayes_rule.lnpdf import make_simple_target, make_star_target
 
 
 def create_initial_gmm_parameters(
@@ -29,10 +29,6 @@ def create_initial_gmm_parameters(
     assert weights.shape == (n_tasks, n_components)
     assert means.shape == (n_tasks, n_components, d_z)
     assert covs.shape == (n_tasks, n_components, d_z, d_z)
-    if n_tasks == 1:  # for backwards compatibility
-        weights = tf.squeeze(weights, 0)
-        means = tf.squeeze(means, 0)
-        covs = tf.squeeze(covs, 0)
     return weights, means, covs
 
 
@@ -54,29 +50,19 @@ def plot2d(target_dist, model, fig, axes, block=False):
     xy_tf = tf.convert_to_tensor(xy, dtype=np.float32)
 
     # determine n_task
-    if tf.rank(model.loc) == 2:
-        n_tasks = 1
-    else:
-        assert tf.rank(model.loc) == 3  # not implemented for more than one batch-dim
-        n_tasks = model.loc.shape[0]
-        xy_tf = tf.broadcast_to(xy_tf[:, None, :], (n_plt**2, n_tasks, 2))
+    n_tasks = model.loc.shape[0]
+    xy_tf = tf.broadcast_to(xy_tf[:, None, :], (n_plt**2, n_tasks, 2))
 
     # evaluate distributions
-    p_tgt = np.exp(target_dist.log_density(xy_tf).numpy())
-    p_model = np.exp(model.log_density(xy_tf).numpy())
+    p_tgt, _, _ = target_dist.log_density(xy_tf)
+    p_model, _, _ = model.log_density(xy_tf)
+    p_tgt = np.exp(p_tgt.numpy())
+    p_model = np.exp(p_model.numpy())
 
     # extract gmm parameters
     weights = np.exp(model.log_w.numpy())
     locs = model.loc.numpy()
     scale_trils = model.scale_tril.numpy()
-
-    # add task dimension also if n_tasks == 1
-    if n_tasks == 1:
-        p_tgt = p_tgt[:, None]
-        p_model = p_model[:, None]
-        weights = weights[None, :]
-        scale_trils = scale_trils[None, :, :]
-        locs = locs[None, :]
 
     # plot
     for l in range(n_tasks):
@@ -137,7 +123,6 @@ def main():
     config["n_samples_per_iter"] = 50
     config["lr_mu_prec"] = 0.01
     config["lr_w"] = 0.05 * config["lr_mu_prec"]
-    config["use_autograd_for_model"] = False
 
     ## seed everything
     np.random.seed(config["seed"])
@@ -145,7 +130,7 @@ def main():
 
     ## set number of tasks
     # learn n_tasks GMMs in parallel along a batch dimension if target dist allows this
-    n_tasks = 1
+    n_tasks = 8
 
     ## Create target dist (GMM): choose one of the following target distributions
     # (i) Simple toy target
@@ -157,13 +142,7 @@ def main():
     config["savepath"] = os.path.join(scriptpath, "log", "star_gmm")
     config["n_components_model"] = 10
     config["n_dimensions_model"] = 2
-    target_dist = make_star_target(num_components=5)
-    # (iii) Random GMM
-    # config["savepath"] = os.path.join(scriptpath, "log", "random_gmm")
-    # n_dimensions = 200
-    # config["n_components_model"] = 3
-    # config["n_dimensions_model"] = n_dimensions
-    # target_dist = make_target(num_dimensions=n_dimensions)
+    target_dist = make_star_target(n_tasks=n_tasks, n_components=5)
 
     ## create initial GMM parameters
     w_init, mu_init, cov_init = create_initial_gmm_parameters(
