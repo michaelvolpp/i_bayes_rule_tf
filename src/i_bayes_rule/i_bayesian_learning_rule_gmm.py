@@ -134,6 +134,8 @@ def step(
     lr_mu_prec,
     prec_method,
 ):
+    assert tf.executing_eagerly()
+    
     # check input
     n_components = model.log_w.shape[-1]
     d_z = model.loc.shape[-1]
