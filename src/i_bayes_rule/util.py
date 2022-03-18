@@ -724,3 +724,14 @@ class GMM:
         return gmm_log_component_densities(
             z=z, loc=self.loc, scale_tril=self.scale_tril
         )
+
+    def log_responsibilities(self, z: tf.Tensor):
+        log_dens, log_comp_dens = gmm_log_density_and_log_component_densities(
+            z=z, log_w=self.log_w, loc=self.loc, scale_tril=self.scale_tril
+        )
+        return gmm_log_responsibilities(
+            z=z,
+            log_w=self.log_w,
+            log_component_densities=log_comp_dens,
+            log_density=log_dens,
+        )

@@ -223,7 +223,7 @@ def step(
     model.log_w = new_log_w
     model.loc = new_mu
     model.prec = new_prec
-    return model, n_feval
+    return model, n_feval, np.mean(log_tgt_density.numpy())
 
 
 @tf.function(
