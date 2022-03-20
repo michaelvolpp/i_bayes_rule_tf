@@ -7,13 +7,13 @@ from tqdm import tqdm
 
 from i_bayes_rule.lnpdf import LNPDF
 from i_bayes_rule.util import (
-    GMM,
     compute_S_bar,
     expectation_prod_neg,
     log_omega_to_log_w,
     log_w_to_log_omega,
-    scale_tril_to_cov,
 )
+from gmm_model.gmm import GMM
+from gmm_model.util import scale_tril_to_cov
 
 
 def i_bayesian_learning_rule_gmm(
@@ -50,7 +50,7 @@ def i_bayesian_learning_rule_gmm(
     with tqdm(total=config["n_iter"]) as pbar:
         for i in range(config["n_iter"]):
             # update parameters
-            model, n_fevals = step(
+            model, n_fevals, mean_log_tgt_density = step(
                 target_dist=target_dist,
                 model=model,
                 n_samples=config["n_samples_per_iter"],

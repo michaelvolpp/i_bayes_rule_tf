@@ -157,3 +157,4 @@ log/
 *.code-workspace
 wandb/
 misc/
+.idea
