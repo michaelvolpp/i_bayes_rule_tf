@@ -3,7 +3,7 @@ import math
 import numpy as np
 import tensorflow as tf
 
-from i_bayes_rule.util import cov_to_scale_tril, gmm_log_density_grad_hess, sample_gmm
+from gmm_model.util import cov_to_scale_tril, gmm_log_density_grad_hess, sample_gmm
 
 
 class LNPDF:
