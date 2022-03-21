@@ -50,7 +50,7 @@ def i_bayesian_learning_rule_gmm(
     with tqdm(total=config["n_iter"]) as pbar:
         for i in range(config["n_iter"]):
             # update parameters
-            model, n_fevals, mean_log_tgt_density = step(
+            model, n_fevals, _ = step(
                 target_dist=target_dist,
                 model=model,
                 n_samples=config["n_samples_per_iter"],
