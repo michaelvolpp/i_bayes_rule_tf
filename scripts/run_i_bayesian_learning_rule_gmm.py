@@ -129,8 +129,8 @@ def main():
     tf.random.set_seed(config["seed"])
 
     ## set number of tasks
-    # learn n_tasks GMMs in parallel along a batch dimension if target dist allows this
-    n_tasks = 8
+    # learn n_tasks GMMs in parallel along a batch dimension
+    n_tasks = 3
 
     ## Create target dist (GMM): choose one of the following target distributions
     # (i) Simple toy target

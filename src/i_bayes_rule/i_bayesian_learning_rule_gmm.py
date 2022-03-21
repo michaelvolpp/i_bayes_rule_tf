@@ -12,8 +12,8 @@ from i_bayes_rule.util import (
     log_omega_to_log_w,
     log_w_to_log_omega,
 )
-from gmm_model.gmm import GMM
-from gmm_model.util import scale_tril_to_cov
+from gmm_util.gmm import GMM
+from gmm_util.util import scale_tril_to_cov
 
 
 def i_bayesian_learning_rule_gmm(
@@ -135,7 +135,7 @@ def step(
     prec_method,
 ):
     assert tf.executing_eagerly()
-    
+
     # check input
     n_components = model.log_w.shape[-1]
     d_z = model.loc.shape[-1]

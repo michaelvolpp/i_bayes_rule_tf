@@ -8,7 +8,9 @@ This is a Tensorflow 2.0 implementation of the Improved Bayesian Learning Rule f
 ![](./plots/star.png)
 
 ## Getting Started
-Clone this repository and run
+First install ```gmm_util``` from [here](https://github.com/michaelvolpp/gmm_util).
+
+Then, clone this repository and run
 ```
 pip install . 
 ```
