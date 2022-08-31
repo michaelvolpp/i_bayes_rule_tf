@@ -13,7 +13,7 @@ from i_bayes_rule.util import (
     log_w_to_log_omega,
 )
 from gmm_util.gmm import GMM
-from gmm_util.util import scale_tril_to_cov
+from gmm_util.util import scale_tril_to_cov, assert_shape
 
 
 def i_bayesian_learning_rule_gmm(
@@ -26,12 +26,12 @@ def i_bayesian_learning_rule_gmm(
 ):
     ## check inputs
     # mixture weights
-    batch_shape = w_init.shape[:-1]
-    n_components = w_init.shape[-1]
-    d_z = mu_init.shape[-1]
-    assert w_init.shape == batch_shape + (n_components,)
-    assert mu_init.shape == batch_shape + (n_components, d_z)
-    assert cov_init.shape == batch_shape + (n_components, d_z, d_z)
+    batch_shape = tf.shape(w_init)[:-1]
+    n_components = tf.shape(w_init)[-1]
+    d_z = tf.shape(mu_init)[-1]
+    assert_shape(w_init, (batch_shape, n_components))
+    assert_shape(mu_init, (batch_shape, n_components, d_z))
+    assert_shape(cov_init, (batch_shape, n_components, d_z, d_z))
 
     # savepath
     os.makedirs(config["savepath"], exist_ok=True)
@@ -137,13 +137,13 @@ def step(
     assert tf.executing_eagerly()
 
     # check input
-    n_components = model.log_w.shape[-1]
-    d_z = model.loc.shape[-1]
-    batch_shape = model.loc.shape[:-2]
+    n_components = tf.shape(model.log_w)[-1]
+    d_z = tf.shape(model.loc)[-1]
+    batch_shape = tf.shape(model.loc)[:-2]
 
     ## sample z from GMM model
     z = model.sample(n_samples=n_samples)
-    assert z.shape == (n_samples,) + batch_shape + (d_z,)
+    assert_shape(z, (n_samples, batch_shape, d_z))
 
     ## evaluate target distribution at samples, i.e.,
     # the (unnormalized) log posterior density, and its gradient + hessian
@@ -153,11 +153,11 @@ def step(
         log_tgt_density_grad,
         log_tgt_density_hess,  # we only require this for the hessian method
     ) = target_dist.log_density(z=z, compute_grad=True, compute_hess=compute_hess)
-    assert log_tgt_density.shape == (n_samples,) + batch_shape
-    assert log_tgt_density_grad.shape == (n_samples,) + batch_shape + (d_z,)
+    assert_shape(log_tgt_density, (n_samples, batch_shape))
+    assert_shape(log_tgt_density_grad, (n_samples, batch_shape, d_z))
     if compute_hess:
-        assert log_tgt_density_hess.shape == (n_samples,) + batch_shape + (d_z, d_z)
-    n_feval = np.product(z.shape[:-1])  # TODO: is this correct?
+        assert_shape(log_tgt_density_hess, (n_samples, batch_shape, d_z, d_z))
+    n_feval = np.product(tf.shape(z)[:-1])  # TODO: is this correct?
 
     ## evaluate the GMM model, and its gradient + hessian at samples
     (
@@ -165,14 +165,14 @@ def step(
         log_model_density_grad,
         log_model_density_hess,
     ) = model.log_density(z=z, compute_grad=True, compute_hess=True)
-    assert log_model_density.shape == (n_samples,) + batch_shape
-    assert log_model_density_grad.shape == (n_samples,) + batch_shape + (d_z,)
-    assert log_model_density_hess.shape == (n_samples,) + batch_shape + (d_z, d_z)
+    assert_shape(log_model_density, (n_samples, batch_shape))
+    assert_shape(log_model_density_grad, (n_samples, batch_shape, d_z))
+    assert_shape(log_model_density_hess, (n_samples, batch_shape, d_z, d_z))
 
     ## compute delta(z)
     # TODO: they do this somehow differently
     log_delta_z = model.log_component_densities(z=z) - log_model_density[..., None]
-    assert log_delta_z.shape == (n_samples,) + batch_shape + (n_components,)
+    assert_shape(log_delta_z, (n_samples, batch_shape, n_components))
 
     # TODO: learning rate decay?
 
@@ -208,7 +208,7 @@ def step(
             log_target_density_grad=log_tgt_density_grad,
             log_model_density_hess=log_model_density_hess,
         )
-    assert g.shape == batch_shape + (n_components, d_z, d_z)
+    assert_shape(g, (batch_shape, n_components, d_z, d_z))
     new_prec = update_prec(
         prec=model.prec,
         prec_tril=model.prec_tril,
@@ -217,9 +217,9 @@ def step(
     )
 
     # check output
-    assert new_log_w.shape == model.log_w.shape
-    assert new_mu.shape == model.loc.shape
-    assert new_prec.shape == model.prec.shape
+    assert_shape(new_log_w, tf.shape(model.log_w))
+    assert_shape(new_mu, tf.shape(model.loc))
+    assert_shape(new_prec, tf.shape(model.prec))
     model.log_w = new_log_w
     model.loc = new_mu
     model.prec = new_prec
@@ -243,14 +243,13 @@ def update_log_w(
     lr: float,
 ):
     # check inputs
-    if tf.executing_eagerly():
-        batch_shape = log_w.shape[:-1]
-        n_components = log_w.shape[-1]
-        n_samples = log_target_density.shape[0]
-        assert log_w.shape == batch_shape + (n_components,)
-        assert log_delta_z.shape == (n_samples,) + batch_shape + (n_components,)
-        assert log_target_density.shape == (n_samples,) + batch_shape
-        assert log_model_density.shape == (n_samples,) + batch_shape
+    batch_shape = tf.shape(log_w)[:-1]
+    n_components = tf.shape(log_w)[-1]
+    n_samples = tf.shape(log_target_density)[0]
+    assert_shape(log_w, (batch_shape, n_components))
+    assert_shape(log_delta_z, (n_samples, batch_shape, n_components))
+    assert_shape(log_target_density, (n_samples, batch_shape))
+    assert_shape(log_model_density, (n_samples, batch_shape))
 
     # computations are performed in log_omega space
     #  where omega[k] := w[k] / w[K] for k=1..K-1
@@ -258,10 +257,10 @@ def update_log_w(
 
     ## update log_omega
     b_z = -log_target_density + log_model_density
-    # assert b_z.shape == (n_samples,) + batch_shape
+    assert_shape(b_z, (n_samples, batch_shape))
     # compute E_q[delta(z) * b(z)]
     expectation = expectation_prod_neg(log_a_z=log_delta_z, b_z=b_z[..., None])
-    # assert expectation.shape == batch_shape + (n_components,)
+    assert_shape(expectation, (batch_shape, n_components))
     # compute E_q[(delta(z)[:-1] - delta(z)[-1])*b(z)]
     d_log_omega = expectation[..., :-1] - expectation[..., -1:]
     # update log_omega
@@ -272,8 +271,7 @@ def update_log_w(
     log_w = log_omega_to_log_w(log_omega)
 
     # check outputs
-    if tf.executing_eagerly():
-        assert log_w.shape == batch_shape + (n_components,)
+    assert_shape(log_w, (batch_shape, n_components))
     return log_w
 
 
@@ -296,38 +294,36 @@ def update_mu(
     lr: float,
 ):
     # check inputs
-    if tf.executing_eagerly():
-        batch_shape = mu.shape[:-2]
-        n_components = mu.shape[-2]
-        d_z = mu.shape[-1]
-        n_samples = log_target_density_grad.shape[0]
-        assert mu.shape == batch_shape + (n_components, d_z)
-        assert prec_tril.shape == batch_shape + (n_components, d_z, d_z)
-        assert log_delta_z.shape == (n_samples,) + batch_shape + (n_components,)
-        assert log_target_density_grad.shape == (n_samples,) + batch_shape + (d_z,)
-        assert log_model_density_grad.shape == (n_samples,) + batch_shape + (d_z,)
+    batch_shape = tf.shape(mu)[:-2]
+    n_components = tf.shape(mu)[-2]
+    d_z = tf.shape(mu)[-1]
+    n_samples = tf.shape(log_target_density_grad)[0]
+    assert_shape(mu, (batch_shape, n_components, d_z))
+    assert_shape(prec_tril, (batch_shape, n_components, d_z, d_z))
+    assert_shape(log_delta_z, (n_samples, batch_shape, n_components))
+    assert_shape(log_target_density_grad, (n_samples, batch_shape, d_z))
+    assert_shape(log_model_density_grad, (n_samples, batch_shape, d_z))
 
     ## update mu
     b_z_grad = -log_target_density_grad + log_model_density_grad
-    # assert b_z_grad.shape == (n_samples,) + batch_shape + (d_z,)
+    assert_shape(b_z_grad, (n_samples, batch_shape, d_z))
     # compute E_q[delta(z) * d/dz(b(z))]
     expectation = expectation_prod_neg(
         log_a_z=log_delta_z[..., None], b_z=b_z_grad[..., None, :]
     )
-    # assert expectation.shape == batch_shape + (n_components, d_z)
+    assert_shape(expectation, (batch_shape, n_components, d_z))
     # compute S^{-1} * E_q[delta(z)*grad_z(b(z))]
     d_mu = tf.linalg.cholesky_solve(
         chol=prec_tril,
         rhs=expectation[..., None],
     )[..., 0]
-    # assert d_mu.shape == batch_shape + (n_components, d_z)
+    assert_shape(d_mu, (batch_shape, n_components, d_z))
     # update mu
     d_mu = -lr * d_mu
     mu = mu + d_mu
 
     # check outputs
-    if tf.executing_eagerly():
-        assert mu.shape == batch_shape + (n_components, d_z)
+    assert_shape(mu, (batch_shape, n_components, d_z))
     return mu
 
 
@@ -344,25 +340,23 @@ def compute_g_hessian(
     log_model_density_hess: tf.Tensor,
 ):
     # check inputs
-    if tf.executing_eagerly():
-        n_samples = log_delta_z.shape[0]
-        n_components = log_delta_z.shape[-1]
-        batch_shape = log_delta_z.shape[1:-1]
-        d_z = log_target_density_hess.shape[-1]
-        assert log_delta_z.shape == (n_samples,) + batch_shape + (n_components,)
-        assert log_target_density_hess.shape == (n_samples,) + batch_shape + (d_z, d_z)
-        assert log_model_density_hess.shape == (n_samples,) + batch_shape + (d_z, d_z)
+    n_samples = tf.shape(log_delta_z)[0]
+    n_components = tf.shape(log_delta_z)[-1]
+    batch_shape = tf.shape(log_delta_z)[1:-1]
+    d_z = tf.shape(log_target_density_hess)[-1]
+    assert_shape(log_delta_z, (n_samples, batch_shape, n_components))
+    assert_shape(log_target_density_hess, (n_samples, batch_shape, d_z, d_z))
+    assert_shape(log_model_density_hess, (n_samples, batch_shape, d_z, d_z))
 
     # compute g = -E_q[delta(z) * d^2/dz^2 b(z)]
     b_z_hess = -log_target_density_hess + log_model_density_hess
-    # assert b_z_hess.shape == (n_samples,) + batch_shape + (d_z, d_z)
+    assert_shape(b_z_hess, (n_samples, batch_shape, d_z, d_z))
     g = -expectation_prod_neg(
         log_a_z=log_delta_z[..., None, None], b_z=b_z_hess[..., None, :, :]
     )
 
     # check output
-    if tf.executing_eagerly():
-        assert g.shape == batch_shape + (n_components, d_z, d_z)
+    assert_shape(g, (batch_shape, n_components, d_z, d_z))
     return g
 
 
@@ -385,17 +379,16 @@ def compute_g_reparam(
     log_model_density_hess: tf.Tensor,
 ):
     # check inputs
-    if tf.executing_eagerly():
-        n_samples = log_delta_z.shape[0]
-        n_components = log_delta_z.shape[-1]
-        batch_shape = log_delta_z.shape[1:-1]
-        d_z = log_target_density_grad.shape[-1]
-        assert z.shape == (n_samples,) + batch_shape + (d_z,)
-        assert mu.shape == batch_shape + (n_components, d_z)
-        assert prec.shape == batch_shape + (n_components, d_z, d_z)
-        assert log_delta_z.shape == (n_samples,) + batch_shape + (n_components,)
-        assert log_target_density_grad.shape == (n_samples,) + batch_shape + (d_z,)
-        assert log_model_density_hess.shape == (n_samples,) + batch_shape + (d_z, d_z)
+    n_samples = tf.shape(log_delta_z)[0]
+    n_components = tf.shape(log_delta_z)[-1]
+    batch_shape = tf.shape(log_delta_z)[1:-1]
+    d_z = tf.shape(log_target_density_grad)[-1]
+    assert_shape(z, (n_samples, batch_shape, d_z))
+    assert_shape(mu, (batch_shape, n_components, d_z))
+    assert_shape(prec, (batch_shape, n_components, d_z, d_z))
+    assert_shape(log_delta_z, (n_samples, batch_shape, n_components))
+    assert_shape(log_target_density_grad, (n_samples, batch_shape, d_z))
+    assert_shape(log_model_density_hess, (n_samples, batch_shape, d_z, d_z))
 
     ## compute g = -E_q[delta(z) * ((S_bar + S_bar^T)/2 + d^2/dz^2 log(q(z))]
     S_bar = compute_S_bar(
@@ -403,15 +396,14 @@ def compute_g_reparam(
     )
     # symmetrize
     S_bar_sym = 0.5 * (S_bar + tf.linalg.matrix_transpose(S_bar))
-    # assert S_bar_sym.shape == (n_samples,) + batch_shape + (n_components, d_z, d_z)
+    assert_shape(S_bar_sym, (n_samples, batch_shape, n_components, d_z, d_z))
     # compute g
     b_z_reparam = S_bar_sym + log_model_density_hess[..., None, :, :]
-    # assert b_z_reparam.shape == (n_samples,) + batch_shape + (n_components, d_z, d_z)
+    assert_shape(b_z_reparam, (n_samples, batch_shape, n_components, d_z, d_z))
     g = -expectation_prod_neg(log_a_z=log_delta_z[..., None, None], b_z=b_z_reparam)
 
     # check output
-    if tf.executing_eagerly():
-        assert g.shape == batch_shape + (n_components, d_z, d_z)
+    assert_shape(g, (batch_shape, n_components, d_z, d_z))
     return g
 
 
@@ -430,22 +422,21 @@ def update_prec(
     lr: float,
 ):
     # check input
-    if tf.executing_eagerly():
-        batch_shape = prec.shape[:-3]
-        n_components = prec.shape[-3]
-        d_z = prec.shape[-1]
-        assert prec.shape == batch_shape + (n_components, d_z, d_z)
-        assert prec_tril.shape == batch_shape + (n_components, d_z, d_z)
-        assert g.shape == batch_shape + (n_components, d_z, d_z)
+    batch_shape = tf.shape(prec)[:-3]
+    n_components = tf.shape(prec)[-3]
+    d_z = tf.shape(prec)[-1]
+    assert_shape(prec, (batch_shape, n_components, d_z, d_z))
+    assert_shape(prec_tril, (batch_shape, n_components, d_z, d_z))
+    assert_shape(g, (batch_shape, n_components, d_z, d_z))
 
     ## update precision
     # solve linear equations
     sols = tf.linalg.cholesky_solve(chol=prec_tril, rhs=g)
-    # assert sols.shape == batch_shape + (n_components, d_z, d_z)
+    assert_shape(sols, (batch_shape, n_components, d_z, d_z))
     # compute update
     d_prec = -lr * g
     d_prec = d_prec + 0.5 * lr**2 * tf.einsum("...kij,...kjl->...kil", g, sols)
-    # assert d_prec.shape == batch_shape + (n_components, d_z, d_z)
+    assert_shape(d_prec, (batch_shape, n_components, d_z, d_z))
     prec = prec + d_prec
 
     # TODO: the following might be more stable?
@@ -456,6 +447,5 @@ def update_prec(
     # prec = 0.5 * (prec + tf.transpose(prec, [0, 2, 1]))
 
     # check output
-    if tf.executing_eagerly():
-        assert prec.shape == batch_shape + (n_components, d_z, d_z)
+    assert_shape(prec, (batch_shape, n_components, d_z, d_z))
     return prec
